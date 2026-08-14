@@ -1040,6 +1040,45 @@ public partial class MainWindow : Window
         if (e.Key == Key.Right) { ChangePage(1); e.Handled = true; }
     }
 
+    private void Window_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (SettingsLayer.Visibility == Visibility.Visible || e.OriginalSource is not DependencyObject source) return;
+
+        if (_settings.FloatingSearchMode)
+        {
+            if (!IsDescendantOf(source, SpotlightCard)) HideLauncher();
+            return;
+        }
+
+        if (IsDescendantOf(source, NormalSearchSurface) ||
+            FindAncestor<Button>(source) is not null ||
+            FindAncestor<TextBox>(source) is not null ||
+            FindAncestor<System.Windows.Controls.Primitives.ScrollBar>(source) is not null) return;
+
+        HideLauncher();
+    }
+
+    private static bool IsDescendantOf(DependencyObject source, DependencyObject ancestor)
+    {
+        for (var current = source; current is not null; current = GetParent(current))
+            if (ReferenceEquals(current, ancestor)) return true;
+        return false;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject source) where T : DependencyObject
+    {
+        for (var current = source; current is not null; current = GetParent(current))
+            if (current is T match) return match;
+        return null;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject current)
+    {
+        if (current is System.Windows.Media.Media3D.Visual3D || current is Visual)
+            return VisualTreeHelper.GetParent(current);
+        return LogicalTreeHelper.GetParent(current);
+    }
+
     private void Window_MouseWheel(object sender, MouseWheelEventArgs e)
     {
         if (SettingsLayer.Visibility != Visibility.Visible && !_settings.FloatingSearchMode) ChangePage(e.Delta < 0 ? 1 : -1);
