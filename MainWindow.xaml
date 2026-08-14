@@ -70,8 +70,8 @@
     <Grid x:Name="Root" Opacity="0" RenderTransformOrigin=".5,.5">
         <Grid.RenderTransform><ScaleTransform x:Name="RootScale" ScaleX="1.08" ScaleY="1.08"/></Grid.RenderTransform>
         <Image x:Name="DesktopBackground" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="Fant"/>
-        <Rectangle Fill="#72080B12"/>
-        <Rectangle>
+        <Rectangle x:Name="PrimaryDimmer" Fill="#72080B12"/>
+        <Rectangle x:Name="EdgeDimmer">
             <Rectangle.Fill>
                 <RadialGradientBrush Center=".5,.42" GradientOrigin=".5,.42" RadiusX=".8" RadiusY=".9">
                     <GradientStop Color="#15000000" Offset="0"/><GradientStop Color="#8B000000" Offset="1"/>
@@ -79,7 +79,7 @@
             </Rectangle.Fill>
         </Rectangle>
 
-        <Grid Margin="46,32,46,26">
+        <Grid x:Name="NormalLauncherShell" Margin="46,32,46,26">
             <Grid.RowDefinitions><RowDefinition Height="72"/><RowDefinition Height="*"/><RowDefinition Height="42"/></Grid.RowDefinitions>
             <Grid Grid.Row="0">
                 <Border Width="300" Height="40" CornerRadius="20" HorizontalAlignment="Center" Background="#42FFFFFF" BorderBrush="#42FFFFFF" BorderThickness="1">
@@ -109,8 +109,58 @@
             <StackPanel Grid.Row="2" x:Name="PageIndicators" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Grid>
 
-        <TextBlock Text="Esc 返回桌面  ·  Shift + Tab 随时呼出" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="22,0,0,14" Foreground="#72FFFFFF" FontSize="12"/>
-        <TextBlock Text="CENTRE" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,22,14" Foreground="#68FFFFFF" FontWeight="SemiBold" FontSize="12"/>
+        <Grid x:Name="SpotlightShell" Visibility="Collapsed">
+            <Border x:Name="SpotlightCard" Width="860" Height="190" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    CornerRadius="40" BorderThickness="1" ClipToBounds="True"
+                    RenderTransformOrigin=".5,.5">
+                <Border.Effect><DropShadowEffect x:Name="SpotlightShadow" BlurRadius="52" ShadowDepth="16" Opacity=".52"/></Border.Effect>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="86"/>
+                        <RowDefinition Height="1"/>
+                        <RowDefinition Height="102"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Margin="28,18,24,12">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Border Width="52" Height="52" CornerRadius="16" VerticalAlignment="Center">
+                            <Image Source="Assets/startIcon.png" Width="52" Height="52"/>
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="15,0,0,0" VerticalAlignment="Center">
+                            <TextBlock x:Name="SpotlightTitle" Text="Centre" FontSize="20" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="SpotlightSubtitle" Text="快速查找并启动应用" FontSize="12.5" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="SpotlightKeyboardHints" Text="↑↓ 选择   ↵ 打开   esc 关闭" FontSize="11.5" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Button x:Name="SpotlightAddButton" Style="{StaticResource CircleActionButton}" Content="＋" FontSize="22" ToolTip="添加应用" Click="AddButton_Click"/>
+                            <Button x:Name="SpotlightSettingsButton" Style="{StaticResource CircleActionButton}" Content="⚙" FontSize="18" ToolTip="设置" Click="SettingsButton_Click"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Border x:Name="SpotlightDivider" Grid.Row="1"/>
+
+                    <Grid Grid.Row="2" Margin="28,17,28,15">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="46"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Path x:Name="SpotlightSearchIcon" Grid.Column="0" Width="21" Height="21" StrokeThickness="2.2" Data="M 13,13 L 18,18 M 15,9 A 6,6 0 1 1 3,9 A 6,6 0 1 1 15,9" Stretch="Uniform"/>
+                        <TextBox x:Name="SpotlightSearchBox" Grid.Column="1" FontFamily="Segoe UI Variable Display,Segoe UI" FontSize="25"
+                                 FontWeight="Light" Background="Transparent" BorderThickness="0" VerticalContentAlignment="Center"
+                                 TextChanged="SpotlightSearchBox_TextChanged" PreviewKeyDown="SpotlightSearchBox_PreviewKeyDown"/>
+                        <TextBlock x:Name="SpotlightSearchHint" Grid.Column="1" Text="搜索应用…" FontFamily="Segoe UI Variable Display,Segoe UI"
+                                   FontSize="25" FontWeight="Light" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                    </Grid>
+
+                    <Border x:Name="SpotlightResultsBorder" Grid.Row="3" BorderThickness="0,1,0,0" Visibility="Collapsed" Padding="14,10,14,14">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="SpotlightResults"/>
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <TextBlock x:Name="LauncherFooterHint" Text="Esc 返回桌面  ·  Shift + Tab 随时呼出" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="22,0,0,14" Foreground="#72FFFFFF" FontSize="12"/>
+        <TextBlock x:Name="BrandFooter" Text="CENTRE" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,22,14" Foreground="#68FFFFFF" FontWeight="SemiBold" FontSize="12"/>
 
         <Border x:Name="ToastBorder" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,72"
                 Background="#E52A2F3A" BorderBrush="#45FFFFFF" BorderThickness="1" CornerRadius="18"
@@ -136,6 +186,13 @@
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,28,0,20">
                         <StackPanel>
+                            <Border Background="#20FFFFFF" CornerRadius="14" Padding="16,13" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="中央悬浮搜索" Foreground="White" FontSize="15"/><TextBlock Text="超大圆角、一体化搜索与键盘导航" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
+                                    <CheckBox x:Name="FloatingSearchModeCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
+                                </Grid>
+                            </Border>
                             <Border Background="#20FFFFFF" CornerRadius="14" Padding="16,13" Margin="0,0,0,22">
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>

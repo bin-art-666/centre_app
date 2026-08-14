@@ -16,6 +16,7 @@ public sealed class LauncherItemData
 
 public sealed class LauncherSettings
 {
+    public bool FloatingSearchMode { get; set; }
     public bool FullScreen { get; set; } = true;
     public double WindowWidth { get; set; } = 1200;
     public double WindowHeight { get; set; } = 760;
@@ -25,6 +26,7 @@ public sealed class LauncherSettings
 
     public LauncherSettings Clone() => new()
     {
+        FloatingSearchMode = FloatingSearchMode,
         FullScreen = FullScreen,
         WindowWidth = WindowWidth,
         WindowHeight = WindowHeight,

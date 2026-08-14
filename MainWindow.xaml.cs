@@ -18,6 +18,7 @@ public partial class MainWindow : Window
 {
     private const int HotkeyId = 0xCE71;
     private const string InternalDragFormat = "Centre.LauncherItem";
+    private const int SpotlightMaxResults = 7;
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".exe", ".lnk", ".appref-ms"
@@ -37,6 +38,9 @@ public partial class MainWindow : Window
     private bool _suppressNextClick;
     private bool _isLoaded;
     private bool _isSettingsInitializing;
+    private bool _syncingSearch;
+    private bool _spotlightDark = true;
+    private int _spotlightSelectedIndex;
 
     private int ItemsPerPage => _settings.Rows * _settings.Columns;
 
@@ -66,9 +70,10 @@ public partial class MainWindow : Window
         _visibleItems = [.. _allItems];
         _isLoaded = true;
         ApplyGridSettings();
-        RenderPage();
+        ApplyDisplayMode();
+        RenderCurrentView();
         AnimateIn();
-        SearchBox.Focus();
+        FocusActiveSearch();
     }
 
     private void MainWindow_SourceInitialized(object? sender, EventArgs e)
@@ -78,7 +83,7 @@ public partial class MainWindow : Window
         _source?.AddHook(WndProc);
         if (!RegisterHotKey(handle, HotkeyId, 0x0004, 0x09))
             ShowToast("Shift + Tab 已被其他程序占用");
-        ApplyDwmCorners(!_settings.FullScreen);
+        ApplyDwmCorners(!_settings.FullScreen && !_settings.FloatingSearchMode);
     }
 
     private void MainWindow_Closed(object? sender, EventArgs e)
@@ -148,7 +153,7 @@ public partial class MainWindow : Window
             PersistItems();
             RefreshFilter();
             _currentPage = Math.Max(0, (_visibleItems.Count - 1) / ItemsPerPage);
-            RenderPage(true);
+            RenderCurrentView(true);
         }
 
         var parts = new List<string>();
@@ -240,6 +245,185 @@ public partial class MainWindow : Window
 
         if (animate) AnimatePage(direction);
     }
+
+    private void RenderCurrentView(bool animate = false, int direction = 1)
+    {
+        if (_settings.FloatingSearchMode) RenderSpotlight(animate);
+        else RenderPage(animate, direction);
+    }
+
+    private void RenderSpotlight(bool animate = false)
+    {
+        if (!_isLoaded) return;
+        var query = SpotlightSearchBox.Text.Trim();
+        var expanded = query.Length > 0;
+        var results = expanded ? _visibleItems.Take(SpotlightMaxResults).ToList() : [];
+        _spotlightSelectedIndex = results.Count == 0 ? 0 : Math.Clamp(_spotlightSelectedIndex, 0, results.Count - 1);
+        SpotlightResults.Children.Clear();
+
+        if (expanded && results.Count == 0)
+        {
+            SpotlightResults.Children.Add(new TextBlock
+            {
+                Text = "没有找到匹配的应用",
+                Foreground = BrushFrom(_spotlightDark ? "#98FFFFFF" : "#78000000"),
+                FontSize = 14,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                Margin = new Thickness(0, 20, 0, 18)
+            });
+        }
+        else
+        {
+            for (var index = 0; index < results.Count; index++)
+                SpotlightResults.Children.Add(CreateSpotlightResult(results[index], index));
+        }
+
+        SpotlightResultsBorder.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        SpotlightSubtitle.Text = _allItems.Count == 0
+            ? "点击 + 添加你的第一个应用"
+            : expanded
+                ? $"找到 {_visibleItems.Count} 个结果"
+                : "快速查找并启动应用";
+
+        var resultHeight = results.Count == 0 ? 78 : results.Count * 72 + 18;
+        var targetHeight = expanded ? Math.Min(730, 190 + resultHeight) : 190;
+        if (animate)
+        {
+            SpotlightCard.BeginAnimation(HeightProperty,
+                new DoubleAnimation(SpotlightCard.ActualHeight > 0 ? SpotlightCard.ActualHeight : SpotlightCard.Height, targetHeight,
+                    TimeSpan.FromMilliseconds(260)) { EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut } });
+        }
+        else
+        {
+            SpotlightCard.BeginAnimation(HeightProperty, null);
+            SpotlightCard.Height = targetHeight;
+        }
+    }
+
+    private Button CreateSpotlightResult(LauncherItemData item, int index)
+    {
+        const double iconSize = 48;
+        var palette = new[] { "#4E78E8", "#7A5CE6", "#E45B72", "#2AAE91", "#E88B3D", "#3E9CCC" };
+        var fallback = new Border
+        {
+            Width = iconSize,
+            Height = iconSize,
+            CornerRadius = new CornerRadius(13),
+            Background = BrushFrom(palette[(item.Name.GetHashCode() & int.MaxValue) % palette.Length]),
+            Child = new TextBlock
+            {
+                Text = GetInitial(item.Name),
+                Foreground = System.Windows.Media.Brushes.White,
+                FontSize = 21,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+        var image = new System.Windows.Controls.Image
+        {
+            Source = item.Icon,
+            Width = iconSize,
+            Height = iconSize,
+            Stretch = Stretch.Uniform,
+            Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 8, ShadowDepth = 2, Opacity = .28 }
+        };
+        fallback.Visibility = item.Icon is null ? Visibility.Visible : Visibility.Collapsed;
+        var iconHost = new Grid { Width = iconSize, Height = iconSize };
+        iconHost.Children.Add(fallback);
+        iconHost.Children.Add(image);
+        _ = LoadIconAsync(item, image, fallback);
+
+        var title = new TextBlock
+        {
+            Text = item.Name,
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = BrushFrom(_spotlightDark ? "#F5FFFFFF" : "#E5000000"),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        var subtitle = new TextBlock
+        {
+            Text = item.TargetPath,
+            FontSize = 11.5,
+            Foreground = BrushFrom(_spotlightDark ? "#86FFFFFF" : "#70000000"),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        var text = new StackPanel { Margin = new Thickness(14, 0, 16, 0), VerticalAlignment = VerticalAlignment.Center };
+        text.Children.Add(title);
+        text.Children.Add(subtitle);
+
+        var openHint = new TextBlock
+        {
+            Text = index == _spotlightSelectedIndex ? "↵" : string.Empty,
+            FontSize = 15,
+            Foreground = BrushFrom(_spotlightDark ? "#A8FFFFFF" : "#76000000"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 12, 0)
+        };
+        var content = new Grid();
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(iconHost, 0);
+        Grid.SetColumn(text, 1);
+        Grid.SetColumn(openHint, 2);
+        content.Children.Add(iconHost);
+        content.Children.Add(text);
+        content.Children.Add(openHint);
+
+        var button = new Button
+        {
+            Content = content,
+            Tag = item,
+            Height = 68,
+            Margin = new Thickness(0, 2, 0, 2),
+            Padding = new Thickness(12, 8, 8, 8),
+            HorizontalContentAlignment = System.Windows.HorizontalAlignment.Stretch,
+            Background = index == _spotlightSelectedIndex
+                ? BrushFrom(_spotlightDark ? "#2FFFFFFF" : "#16000000")
+                : System.Windows.Media.Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = Cursors.Hand,
+            FocusVisualStyle = null,
+            Template = ResultButtonTemplate(),
+            ContextMenu = CreateItemContextMenu(item)
+        };
+        button.Click += (_, _) => LaunchItem(item);
+        button.MouseEnter += (_, _) => { _spotlightSelectedIndex = index; UpdateSpotlightSelection(); };
+        return button;
+    }
+
+    private void UpdateSpotlightSelection()
+    {
+        for (var index = 0; index < SpotlightResults.Children.Count; index++)
+        {
+            if (SpotlightResults.Children[index] is not Button button) continue;
+            button.Background = index == _spotlightSelectedIndex
+                ? BrushFrom(_spotlightDark ? "#2FFFFFFF" : "#16000000")
+                : System.Windows.Media.Brushes.Transparent;
+            if (button.Content is Grid grid && grid.Children.OfType<TextBlock>().FirstOrDefault() is { } hint)
+                hint.Text = index == _spotlightSelectedIndex ? "↵" : string.Empty;
+        }
+    }
+
+    private static ControlTemplate ResultButtonTemplate()
+    {
+        var factory = new FrameworkElementFactory(typeof(Border));
+        factory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+        factory.SetValue(Border.CornerRadiusProperty, new CornerRadius(18));
+        factory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+        var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        presenter.SetValue(ContentPresenter.ContentProperty, new TemplateBindingExtension(ContentControl.ContentProperty));
+        presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, System.Windows.HorizontalAlignment.Stretch);
+        presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        factory.AppendChild(presenter);
+        return new ControlTemplate(typeof(Button)) { VisualTree = factory };
+    }
+
+    private static SolidColorBrush BrushFrom(string value) =>
+        (SolidColorBrush)new BrushConverter().ConvertFromString(value)!;
 
     private Button CreateLauncherButton(LauncherItemData item)
     {
@@ -384,7 +568,7 @@ public partial class MainWindow : Window
         item.Name = dialog.Result;
         PersistItems();
         RefreshFilter();
-        RenderPage(true);
+        RenderCurrentView(true);
     }
 
     private void ChangeItemIcon(LauncherItemData item)
@@ -401,7 +585,7 @@ public partial class MainWindow : Window
             item.CustomIconPath = AppDataStore.CopyCustomIcon(item.Id, dialog.FileName);
             item.Icon = null;
             PersistItems();
-            RenderPage(true);
+            RenderCurrentView(true);
             ShowToast("图标已更新");
         }
         catch (Exception ex) { ShowToast($"无法更换图标：{ex.Message}"); }
@@ -413,7 +597,7 @@ public partial class MainWindow : Window
         item.CustomIconPath = null;
         item.Icon = null;
         PersistItems();
-        RenderPage(true);
+        RenderCurrentView(true);
         ShowToast("已恢复默认图标");
     }
 
@@ -425,7 +609,7 @@ public partial class MainWindow : Window
         _allItems.Remove(item);
         PersistItems();
         RefreshFilter();
-        RenderPage(true, -1);
+        RenderCurrentView(true, -1);
         ShowToast("应用已移除");
     }
 
@@ -497,7 +681,7 @@ public partial class MainWindow : Window
     {
         PersistItems();
         RefreshFilter();
-        RenderPage(true);
+        RenderCurrentView(true);
         e.Effects = System.Windows.DragDropEffects.Move;
         e.Handled = true;
     }
@@ -506,6 +690,11 @@ public partial class MainWindow : Window
     {
         if (_suppressNextClick) { _suppressNextClick = false; return; }
         if (sender is not Button { Tag: LauncherItemData item }) return;
+        LaunchItem(item);
+    }
+
+    private void LaunchItem(LauncherItemData item)
+    {
         if (!File.Exists(item.TargetPath))
         {
             ShowToast($"找不到“{item.Name}”的目标文件");
@@ -529,23 +718,49 @@ public partial class MainWindow : Window
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
+        if (_syncingSearch) return;
+        _syncingSearch = true;
+        SpotlightSearchBox.Text = SearchBox.Text;
+        SpotlightSearchBox.CaretIndex = SpotlightSearchBox.Text.Length;
+        _syncingSearch = false;
+        HandleSearchChanged(SearchBox.Text);
+    }
+
+    private void SpotlightSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_syncingSearch) return;
+        _syncingSearch = true;
+        SearchBox.Text = SpotlightSearchBox.Text;
+        SearchBox.CaretIndex = SearchBox.Text.Length;
+        _syncingSearch = false;
+        HandleSearchChanged(SpotlightSearchBox.Text);
+    }
+
+    private void HandleSearchChanged(string text)
+    {
         if (!_isLoaded) return;
         SearchHint.Visibility = string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
         ClearSearchButton.Visibility = string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
+        SpotlightSearchHint.Visibility = string.IsNullOrEmpty(SpotlightSearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
         _currentPage = 0;
+        _spotlightSelectedIndex = 0;
         RefreshFilter();
-        RenderPage(true);
+        RenderCurrentView(true);
     }
 
     private void RefreshFilter()
     {
-        var query = SearchBox.Text.Trim();
+        var query = (_settings.FloatingSearchMode ? SpotlightSearchBox.Text : SearchBox.Text).Trim();
         _visibleItems = query.Length == 0
             ? [.. _allItems]
             : _allItems.Where(item => item.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase)).ToList();
     }
 
-    private void ClearSearchButton_Click(object sender, RoutedEventArgs e) { SearchBox.Clear(); SearchBox.Focus(); }
+    private void ClearSearchButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_settings.FloatingSearchMode) SpotlightSearchBox.Clear(); else SearchBox.Clear();
+        FocusActiveSearch();
+    }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
@@ -555,6 +770,7 @@ public partial class MainWindow : Window
         _isSettingsInitializing = true;
         WidthSlider.Maximum = Math.Max(800, workArea.Width);
         HeightSlider.Maximum = Math.Max(600, workArea.Height);
+        FloatingSearchModeCheck.IsChecked = _settings.FloatingSearchMode;
         FullScreenCheck.IsChecked = _settings.FullScreen;
         WidthSlider.Value = Math.Clamp(_settings.WindowWidth, WidthSlider.Minimum, WidthSlider.Maximum);
         HeightSlider.Value = Math.Clamp(_settings.WindowHeight, HeightSlider.Minimum, HeightSlider.Maximum);
@@ -576,12 +792,15 @@ public partial class MainWindow : Window
         _settings = ReadSettingsControls();
         ApplyWindowSettings(_settings);
         ApplyGridSettings();
-        RenderPage(true);
+        ApplyDisplayMode();
+        RenderCurrentView(true);
     }
 
     private void UpdateSettingsLabels()
     {
-        WindowSizePanel.IsEnabled = FullScreenCheck.IsChecked != true;
+        var floating = FloatingSearchModeCheck.IsChecked == true;
+        FullScreenCheck.IsEnabled = !floating;
+        WindowSizePanel.IsEnabled = !floating && FullScreenCheck.IsChecked != true;
         WidthValueText.Text = $"{Math.Round(WidthSlider.Value):0} px";
         HeightValueText.Text = $"{Math.Round(HeightSlider.Value):0} px";
         ColumnsValueText.Text = $"{Math.Round(ColumnsSlider.Value):0} 列";
@@ -594,6 +813,7 @@ public partial class MainWindow : Window
         var workArea = SystemParameters.WorkArea;
         var settings = new LauncherSettings
         {
+            FloatingSearchMode = FloatingSearchModeCheck.IsChecked == true,
             FullScreen = FullScreenCheck.IsChecked == true,
             WindowWidth = Math.Round(WidthSlider.Value),
             WindowHeight = Math.Round(HeightSlider.Value),
@@ -622,7 +842,8 @@ public partial class MainWindow : Window
             _settingsSnapshot = null;
             ApplyWindowSettings(_settings);
             ApplyGridSettings();
-            RenderPage(true);
+            ApplyDisplayMode();
+            RenderCurrentView(true);
         }
         CloseSettingsDrawer();
     }
@@ -650,7 +871,7 @@ public partial class MainWindow : Window
         WindowState = WindowState.Normal;
         ResizeMode = ResizeMode.NoResize;
 
-        if (settings.FullScreen)
+        if (settings.FullScreen || settings.FloatingSearchMode)
         {
             Left = SystemParameters.VirtualScreenLeft;
             Top = SystemParameters.VirtualScreenTop;
@@ -664,7 +885,7 @@ public partial class MainWindow : Window
             Left = workArea.Left + (workArea.Width - Width) / 2;
             Top = workArea.Top + (workArea.Height - Height) / 2;
         }
-        ApplyDwmCorners(!settings.FullScreen);
+        ApplyDwmCorners(!settings.FullScreen && !settings.FloatingSearchMode);
     }
 
     private void ApplyDwmCorners(bool rounded)
@@ -679,8 +900,134 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private void ApplyDisplayMode()
+    {
+        var floating = _settings.FloatingSearchMode;
+        NormalLauncherShell.Visibility = floating ? Visibility.Collapsed : Visibility.Visible;
+        SpotlightShell.Visibility = floating ? Visibility.Visible : Visibility.Collapsed;
+        LauncherFooterHint.Visibility = floating ? Visibility.Collapsed : Visibility.Visible;
+        BrandFooter.Visibility = floating ? Visibility.Collapsed : Visibility.Visible;
+
+        if (floating)
+        {
+            ApplySpotlightTheme();
+            RenderSpotlight();
+        }
+        else
+        {
+            PrimaryDimmer.Fill = BrushFrom("#72080B12");
+            EdgeDimmer.Opacity = 1;
+        }
+    }
+
+    private void ApplySpotlightTheme()
+    {
+        try
+        {
+            var value = Microsoft.Win32.Registry.GetValue(
+                @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "AppsUseLightTheme", 0);
+            _spotlightDark = value is not int theme || theme == 0;
+        }
+        catch { _spotlightDark = true; }
+
+        if (_spotlightDark)
+        {
+            SpotlightCard.Background = BrushFrom("#F01B1D23");
+            SpotlightCard.BorderBrush = BrushFrom("#38FFFFFF");
+            SpotlightTitle.Foreground = BrushFrom("#F7FFFFFF");
+            SpotlightSubtitle.Foreground = BrushFrom("#91FFFFFF");
+            SpotlightKeyboardHints.Foreground = BrushFrom("#78FFFFFF");
+            SpotlightSearchBox.Foreground = BrushFrom("#F7FFFFFF");
+            SpotlightSearchBox.CaretBrush = BrushFrom("#FFFFFFFF");
+            SpotlightSearchHint.Foreground = BrushFrom("#64FFFFFF");
+            SpotlightSearchIcon.Stroke = BrushFrom("#C8FFFFFF");
+            SpotlightDivider.Background = BrushFrom("#22FFFFFF");
+            SpotlightResultsBorder.BorderBrush = BrushFrom("#22FFFFFF");
+            SpotlightShadow.Color = Colors.Black;
+            SpotlightAddButton.Foreground = System.Windows.Media.Brushes.White;
+            SpotlightSettingsButton.Foreground = System.Windows.Media.Brushes.White;
+            SpotlightAddButton.Background = BrushFrom("#28FFFFFF");
+            SpotlightSettingsButton.Background = BrushFrom("#28FFFFFF");
+            SpotlightAddButton.BorderBrush = BrushFrom("#28FFFFFF");
+            SpotlightSettingsButton.BorderBrush = BrushFrom("#28FFFFFF");
+            PrimaryDimmer.Fill = BrushFrom("#65060910");
+        }
+        else
+        {
+            SpotlightCard.Background = BrushFrom("#F4F7F8FB");
+            SpotlightCard.BorderBrush = BrushFrom("#48FFFFFF");
+            SpotlightTitle.Foreground = BrushFrom("#E9000000");
+            SpotlightSubtitle.Foreground = BrushFrom("#78000000");
+            SpotlightKeyboardHints.Foreground = BrushFrom("#62000000");
+            SpotlightSearchBox.Foreground = BrushFrom("#EA000000");
+            SpotlightSearchBox.CaretBrush = BrushFrom("#E0000000");
+            SpotlightSearchHint.Foreground = BrushFrom("#58000000");
+            SpotlightSearchIcon.Stroke = BrushFrom("#9C000000");
+            SpotlightDivider.Background = BrushFrom("#17000000");
+            SpotlightResultsBorder.BorderBrush = BrushFrom("#17000000");
+            SpotlightShadow.Color = BrushFrom("#A0000000").Color;
+            SpotlightAddButton.Foreground = BrushFrom("#C8000000");
+            SpotlightSettingsButton.Foreground = BrushFrom("#C8000000");
+            SpotlightAddButton.Background = BrushFrom("#0F000000");
+            SpotlightSettingsButton.Background = BrushFrom("#0F000000");
+            SpotlightAddButton.BorderBrush = BrushFrom("#18000000");
+            SpotlightSettingsButton.BorderBrush = BrushFrom("#18000000");
+            PrimaryDimmer.Fill = BrushFrom("#380B1020");
+        }
+        EdgeDimmer.Opacity = .35;
+    }
+
+    private void FocusActiveSearch()
+    {
+        if (_settings.FloatingSearchMode)
+        {
+            SpotlightSearchBox.Focus();
+            SpotlightSearchBox.CaretIndex = SpotlightSearchBox.Text.Length;
+        }
+        else
+        {
+            SearchBox.Focus();
+            SearchBox.CaretIndex = SearchBox.Text.Length;
+        }
+    }
+
+    private void SpotlightSearchBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e) => HandleSpotlightKey(e);
+
+    private void HandleSpotlightKey(System.Windows.Input.KeyEventArgs e)
+    {
+        var results = _visibleItems.Take(SpotlightMaxResults).ToList();
+        switch (e.Key)
+        {
+            case Key.Down when results.Count > 0:
+                _spotlightSelectedIndex = Math.Min(results.Count - 1, _spotlightSelectedIndex + 1);
+                UpdateSpotlightSelection();
+                e.Handled = true;
+                break;
+            case Key.Up when results.Count > 0:
+                _spotlightSelectedIndex = Math.Max(0, _spotlightSelectedIndex - 1);
+                UpdateSpotlightSelection();
+                e.Handled = true;
+                break;
+            case Key.Enter when results.Count > 0 && !string.IsNullOrWhiteSpace(SpotlightSearchBox.Text):
+                LaunchItem(results[_spotlightSelectedIndex]);
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                if (!string.IsNullOrEmpty(SpotlightSearchBox.Text)) SpotlightSearchBox.Clear();
+                else HideLauncher();
+                e.Handled = true;
+                break;
+        }
+    }
+
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        if (_settings.FloatingSearchMode && SettingsLayer.Visibility != Visibility.Visible)
+        {
+            HandleSpotlightKey(e);
+            return;
+        }
         if (e.Key == Key.Escape)
         {
             if (SettingsLayer.Visibility == Visibility.Visible) CancelSettings_Click(sender, e);
@@ -695,7 +1042,7 @@ public partial class MainWindow : Window
 
     private void Window_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (SettingsLayer.Visibility != Visibility.Visible) ChangePage(e.Delta < 0 ? 1 : -1);
+        if (SettingsLayer.Visibility != Visibility.Visible && !_settings.FloatingSearchMode) ChangePage(e.Delta < 0 ? 1 : -1);
     }
 
     private void ChangePage(int delta)
@@ -711,11 +1058,12 @@ public partial class MainWindow : Window
     {
         DesktopBackground.Source = CaptureDesktop();
         ApplyWindowSettings(_settings);
+        ApplyDisplayMode();
         Show();
         Activate();
         Topmost = true;
         AnimateIn();
-        SearchBox.Focus();
+        FocusActiveSearch();
     }
 
     private void HideLauncher()
@@ -727,7 +1075,8 @@ public partial class MainWindow : Window
             SettingsLayer.Visibility = Visibility.Collapsed;
             ApplyWindowSettings(_settings);
             ApplyGridSettings();
-            RenderPage();
+            ApplyDisplayMode();
+            RenderCurrentView();
         }
         var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(140));
         fade.Completed += (_, _) => { Hide(); Root.Opacity = 1; };
