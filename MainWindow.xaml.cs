@@ -34,7 +34,9 @@ public partial class MainWindow : Window
     private int _currentPage;
     private HwndSource? _source;
     private System.Windows.Point _dragStart;
+    private System.Windows.Point _backgroundPressPoint;
     private LauncherItemData? _pressedItem;
+    private bool _backgroundClickCandidate;
     private bool _suppressNextClick;
     private bool _isLoaded;
     private bool _isSettingsInitializing;
@@ -1042,20 +1044,46 @@ public partial class MainWindow : Window
 
     private void Window_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (SettingsLayer.Visibility == Visibility.Visible || e.OriginalSource is not DependencyObject source) return;
+        _backgroundClickCandidate = SettingsLayer.Visibility != Visibility.Visible &&
+                                    e.OriginalSource is DependencyObject source &&
+                                    IsBackgroundClickTarget(source);
+        if (_backgroundClickCandidate) _backgroundPressPoint = e.GetPosition(this);
+    }
 
-        if (_settings.FloatingSearchMode)
-        {
-            if (!IsDescendantOf(source, SpotlightCard)) HideLauncher();
-            return;
-        }
+    private void Window_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_backgroundClickCandidate || e.LeftButton != MouseButtonState.Pressed) return;
 
-        if (IsDescendantOf(source, NormalSearchSurface) ||
-            FindAncestor<Button>(source) is not null ||
-            FindAncestor<TextBox>(source) is not null ||
-            FindAncestor<System.Windows.Controls.Primitives.ScrollBar>(source) is not null) return;
+        var position = e.GetPosition(this);
+        if (Math.Abs(position.X - _backgroundPressPoint.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(position.Y - _backgroundPressPoint.Y) >= SystemParameters.MinimumVerticalDragDistance)
+            _backgroundClickCandidate = false;
+    }
+
+    private void Window_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_backgroundClickCandidate) return;
+        _backgroundClickCandidate = false;
+
+        var position = e.GetPosition(this);
+        if (Math.Abs(position.X - _backgroundPressPoint.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(position.Y - _backgroundPressPoint.Y) >= SystemParameters.MinimumVerticalDragDistance ||
+            e.OriginalSource is not DependencyObject source || !IsBackgroundClickTarget(source)) return;
 
         HideLauncher();
+    }
+
+    private bool IsBackgroundClickTarget(DependencyObject source)
+    {
+        if (SettingsLayer.Visibility == Visibility.Visible) return false;
+
+        if (_settings.FloatingSearchMode)
+            return !IsDescendantOf(source, SpotlightCard);
+
+        return !IsDescendantOf(source, NormalSearchSurface) &&
+               FindAncestor<Button>(source) is null &&
+               FindAncestor<TextBox>(source) is null &&
+               FindAncestor<System.Windows.Controls.Primitives.ScrollBar>(source) is null;
     }
 
     private static bool IsDescendantOf(DependencyObject source, DependencyObject ancestor)

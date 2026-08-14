@@ -4,7 +4,11 @@
         Title="Centre" Icon="Assets/Centre.ico"
         WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
         Background="#111318" AllowsTransparency="False" AllowDrop="True"
-        PreviewKeyDown="Window_PreviewKeyDown" PreviewMouseLeftButtonDown="Window_PreviewMouseLeftButtonDown" MouseWheel="Window_MouseWheel"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        PreviewMouseLeftButtonDown="Window_PreviewMouseLeftButtonDown"
+        PreviewMouseMove="Window_PreviewMouseMove"
+        PreviewMouseLeftButtonUp="Window_PreviewMouseLeftButtonUp"
+        MouseWheel="Window_MouseWheel"
         DragEnter="Window_DragEnter" DragOver="Window_DragOver" Drop="Window_Drop">
     <Window.Resources>
         <Style x:Key="LauncherButtonStyle" TargetType="Button">
