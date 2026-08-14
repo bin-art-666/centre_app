@@ -27,7 +27,7 @@ public partial class MainWindow : Window
     private readonly List<LauncherItemData> _allItems = [];
     private List<LauncherItemData> _visibleItems = [];
     private readonly SemaphoreSlim _iconLoader = new(4);
-    private readonly HashSet<Guid> _loadingIcons = [];
+    private readonly Dictionary<Guid, Task<BitmapSource?>> _iconLoadTasks = [];
     private readonly DispatcherTimer _toastTimer;
     private LauncherSettings _settings;
     private LauncherSettings? _settingsSnapshot;
@@ -513,16 +513,44 @@ public partial class MainWindow : Window
 
     private async Task LoadIconAsync(LauncherItemData item, System.Windows.Controls.Image image, Border fallback)
     {
-        if (item.Icon is null && _loadingIcons.Add(item.Id))
+        if (item.Icon is null)
         {
-            await _iconLoader.WaitAsync();
-            try { item.Icon = await Task.Run(() => LoadItemIcon(item)); }
-            finally { _iconLoader.Release(); _loadingIcons.Remove(item.Id); }
+            if (!_iconLoadTasks.TryGetValue(item.Id, out var loadTask))
+            {
+                loadTask = LoadIconWithThrottleAsync(item);
+                _iconLoadTasks[item.Id] = loadTask;
+            }
+
+            try
+            {
+                item.Icon ??= await loadTask;
+            }
+            finally
+            {
+                if (_iconLoadTasks.TryGetValue(item.Id, out var currentTask) && ReferenceEquals(currentTask, loadTask))
+                    _iconLoadTasks.Remove(item.Id);
+            }
         }
 
-        if (!image.IsLoaded && !image.IsVisible) return;
         image.Source = item.Icon;
         fallback.Visibility = item.Icon is null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async Task<BitmapSource?> LoadIconWithThrottleAsync(LauncherItemData item)
+    {
+        await _iconLoader.WaitAsync();
+        try
+        {
+            return await Task.Run(() => LoadItemIcon(item));
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            _iconLoader.Release();
+        }
     }
 
     private static BitmapSource? LoadItemIcon(LauncherItemData item)
