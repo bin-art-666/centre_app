@@ -2,18 +2,32 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <AssemblyName>Centre</AssemblyName>
     <Product>Centre</Product>
     <ApplicationIcon>Assets\Centre.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.1.0</Version>
+    <Authors>bin-art-666</Authors>
+    <RepositoryUrl>https://github.com/bin-art-666/centre_app</RepositoryUrl>
   </PropertyGroup>
 
   <ItemGroup>
     <Resource Include="Assets\startIcon.png" />
     <Resource Include="Assets\Centre.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ToolGood.Words.Pinyin" Version="3.1.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+    <EmbeddedResource Remove="tests\**\*" />
+    <None Remove="tests\**\*" />
   </ItemGroup>
 
 </Project>

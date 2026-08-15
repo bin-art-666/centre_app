@@ -103,6 +103,9 @@
 
             <Grid Grid.Row="1" x:Name="PageHost" ClipToBounds="True">
                 <UniformGrid x:Name="AppGrid" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" AllowDrop="True" Drop="AppGrid_Drop" DragOver="AppGrid_DragOver"/>
+                <Canvas x:Name="DragOverlay" IsHitTestVisible="False">
+                    <Border x:Name="DropIndicator" Width="4" Height="104" CornerRadius="2" Background="#FF6EA8" Visibility="Collapsed"/>
+                </Canvas>
                 <StackPanel x:Name="EmptyPanel" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
                     <Image Source="Assets/startIcon.png" Width="96" Height="96" Margin="0,0,0,22"/>
                     <TextBlock Text="还没有添加应用" Foreground="White" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center"/>
@@ -172,6 +175,16 @@
             <TextBlock x:Name="ToastText" Foreground="White" FontSize="13"/>
         </Border>
 
+        <Border x:Name="UpdateBanner" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0"
+                Background="#F02A2F3A" BorderBrush="#45FFFFFF" BorderThickness="1" CornerRadius="18"
+                Padding="16,10" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="UpdateBannerText" Foreground="White" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                <Button Content="查看更新" Padding="12,5" Margin="0,0,8,0" Click="ViewUpdate_Click"/>
+                <Button Content="忽略" Padding="12,5" Click="DismissUpdate_Click"/>
+            </StackPanel>
+        </Border>
+
         <Grid x:Name="SettingsLayer" Visibility="Collapsed">
             <Button Background="#52000000" BorderThickness="0" Click="SettingsScrim_Click" Cursor="Arrow"/>
             <Border x:Name="SettingsDrawer" Width="410" HorizontalAlignment="Right" Margin="0,14,14,14"
@@ -219,6 +232,28 @@
                             <Slider x:Name="RowsSlider" Minimum="3" Maximum="8" TickFrequency="1" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
                             <Grid><TextBlock Text="图标大小" Foreground="White"/><TextBlock x:Name="IconSizeValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
                             <Slider x:Name="IconSizeSlider" Minimum="48" Maximum="128" TickFrequency="4" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
+
+                            <Separator Background="#35FFFFFF" Margin="0,8,0,20"/>
+                            <TextBlock Text="唤出快捷键" Foreground="White" Margin="0,0,0,8"/>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="HotkeyTextBox" Height="36" IsReadOnly="True" TextAlignment="Center" VerticalContentAlignment="Center"
+                                         PreviewKeyDown="HotkeyTextBox_PreviewKeyDown"/>
+                                <Button Grid.Column="1" Content="恢复默认" Margin="8,0,0,0" Padding="12,0" Click="ResetHotkey_Click"/>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                                <Button Content="Shift + Tab" Padding="12,6" Margin="0,0,8,0" Click="ShiftTabPreset_Click"/>
+                                <Button Content="Alt + Space" Padding="12,6" Click="AltSpacePreset_Click"/>
+                            </StackPanel>
+
+                            <Border Background="#20FFFFFF" CornerRadius="14" Padding="16,13" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="自动检查更新" Foreground="White" FontSize="15"/><TextBlock Text="每天最多检查一次 GitHub Releases" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
+                                    <CheckBox x:Name="AutoUpdateCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
+                                </Grid>
+                            </Border>
+                            <Button Content="立即检查更新" Height="36" Click="CheckUpdates_Click"/>
                         </StackPanel>
                     </ScrollViewer>
 

@@ -1,0 +1,48 @@
+using System.Text.Json;
+
+namespace Centre.Tests;
+
+public sealed class PersistenceTests : IDisposable
+{
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), $"Centre.Tests.{Guid.NewGuid():N}");
+
+    [Fact]
+    public void LegacyItemsDefaultToFileTargets()
+    {
+        Directory.CreateDirectory(_directory);
+        var path = Path.Combine(_directory, "items.json");
+        File.WriteAllText(path, "[{\"Id\":\"13ac80e6-7bf2-47ac-b124-80cbfdffdd93\",\"Name\":\"Legacy\",\"TargetPath\":\"C:\\\\Legacy.exe\"}]");
+        var items = centre_app.AppDataStore.LoadOrDefault(path, () => new List<centre_app.LauncherItemData>());
+        Assert.Single(items);
+        Assert.Equal(centre_app.LauncherTargetKind.File, items[0].TargetKind);
+    }
+
+    [Fact]
+    public void AtomicSaveKeepsPreviousVersionAsBackup()
+    {
+        var path = Path.Combine(_directory, "settings.json");
+        centre_app.AppDataStore.Save(path, new centre_app.LauncherSettings { Columns = 7 });
+        centre_app.AppDataStore.Save(path, new centre_app.LauncherSettings { Columns = 9 });
+        centre_app.AppDataStore.Save(path, new centre_app.LauncherSettings { Columns = 11 });
+        Assert.True(File.Exists(path + ".bak"));
+        Assert.Equal(11, JsonSerializer.Deserialize<centre_app.LauncherSettings>(File.ReadAllText(path))!.Columns);
+        Assert.Equal(9, JsonSerializer.Deserialize<centre_app.LauncherSettings>(File.ReadAllText(path + ".bak"))!.Columns);
+    }
+
+    [Fact]
+    public void CorruptPrimaryRecoversFromBackup()
+    {
+        Directory.CreateDirectory(_directory);
+        var path = Path.Combine(_directory, "settings.json");
+        File.WriteAllText(path, "not-json");
+        File.WriteAllText(path + ".bak", JsonSerializer.Serialize(new centre_app.LauncherSettings { Rows = 6 }));
+        var settings = centre_app.AppDataStore.LoadOrDefault(path, () => new centre_app.LauncherSettings());
+        Assert.Equal(6, settings.Rows);
+        Assert.NotEmpty(Directory.EnumerateFiles(_directory, "settings.json.corrupt.*"));
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_directory, true); } catch { }
+    }
+}

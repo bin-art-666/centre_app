@@ -3,15 +3,32 @@ using System.Windows.Media.Imaging;
 
 namespace centre_app;
 
+public enum LauncherTargetKind
+{
+    File,
+    PackagedApp
+}
+
 public sealed class LauncherItemData
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = string.Empty;
+    public LauncherTargetKind TargetKind { get; set; }
     public string TargetPath { get; set; } = string.Empty;
+    public string? AppUserModelId { get; set; }
+    public string? PackageFamilyName { get; set; }
     public string? CustomIconPath { get; set; }
+    public int LaunchCount { get; set; }
+    public DateTimeOffset? LastLaunchedUtc { get; set; }
 
     [JsonIgnore]
     public BitmapSource? Icon { get; set; }
+
+    [JsonIgnore]
+    public string SearchPinyin { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public string SearchInitials { get; set; } = string.Empty;
 }
 
 public sealed class LauncherSettings
@@ -23,6 +40,11 @@ public sealed class LauncherSettings
     public int Columns { get; set; } = 8;
     public int Rows { get; set; } = 5;
     public double IconSize { get; set; } = 76;
+    public uint HotkeyModifiers { get; set; } = 0x0004;
+    public int HotkeyVirtualKey { get; set; } = 0x09;
+    public bool AutoCheckUpdates { get; set; } = true;
+    public DateTimeOffset? LastUpdateCheckUtc { get; set; }
+    public string? DismissedUpdateVersion { get; set; }
 
     public LauncherSettings Clone() => new()
     {
@@ -32,7 +54,12 @@ public sealed class LauncherSettings
         WindowHeight = WindowHeight,
         Columns = Columns,
         Rows = Rows,
-        IconSize = IconSize
+        IconSize = IconSize,
+        HotkeyModifiers = HotkeyModifiers,
+        HotkeyVirtualKey = HotkeyVirtualKey,
+        AutoCheckUpdates = AutoCheckUpdates,
+        LastUpdateCheckUtc = LastUpdateCheckUtc,
+        DismissedUpdateVersion = DismissedUpdateVersion
     };
 
     public void Normalize(double maxWidth, double maxHeight)
@@ -42,5 +69,10 @@ public sealed class LauncherSettings
         Columns = Math.Clamp(Columns, 4, 12);
         Rows = Math.Clamp(Rows, 3, 8);
         IconSize = Math.Clamp(IconSize, 48, 128);
+        if (HotkeyModifiers == 0 || HotkeyVirtualKey is < 0x08 or > 0xFE)
+        {
+            HotkeyModifiers = 0x0004;
+            HotkeyVirtualKey = 0x09;
+        }
     }
 }

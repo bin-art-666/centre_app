@@ -16,7 +16,8 @@ public static class AppDataStore
 
     private static string ItemsPath => Path.Combine(RootDirectory, "items.json");
     private static string SettingsPath => Path.Combine(RootDirectory, "settings.json");
-    private static string IconsDirectory => Path.Combine(RootDirectory, "Icons");
+    public static string IconsDirectory => Path.Combine(RootDirectory, "Icons");
+    public static string IconCacheDirectory => Path.Combine(RootDirectory, "IconCache");
 
     public static List<LauncherItemData> LoadItems() =>
         LoadOrDefault(ItemsPath, static () => new List<LauncherItemData>());
@@ -57,27 +58,53 @@ public static class AppDataStore
         catch { }
     }
 
-    private static T LoadOrDefault<T>(string path, Func<T> fallback)
+    internal static T LoadOrDefault<T>(string path, Func<T> fallback)
     {
-        try
+        if (TryLoad(path, out T? value)) return value!;
+        if (File.Exists(path)) BackupCorruptFile(path);
+
+        var backupPath = path + ".bak";
+        if (TryLoad(backupPath, out value))
         {
-            if (!File.Exists(path)) return fallback();
-            var value = JsonSerializer.Deserialize<T>(File.ReadAllText(path), JsonOptions);
-            return value ?? fallback();
+            try { Save(path, value!); } catch { }
+            return value!;
         }
-        catch
-        {
-            BackupCorruptFile(path);
-            return fallback();
-        }
+
+        return fallback();
     }
 
-    private static void Save<T>(string path, T value)
+    private static bool TryLoad<T>(string path, out T? value)
     {
-        Directory.CreateDirectory(RootDirectory);
+        value = default;
+        try
+        {
+            if (!File.Exists(path)) return false;
+            value = JsonSerializer.Deserialize<T>(File.ReadAllText(path), JsonOptions);
+            return value is not null;
+        }
+        catch { return false; }
+    }
+
+    internal static void Save<T>(string path, T value)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporaryPath = path + ".tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(value, JsonOptions));
-        File.Move(temporaryPath, path, true);
+        var json = JsonSerializer.Serialize(value, JsonOptions);
+        using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+        using (var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)))
+        {
+            writer.Write(json);
+            writer.Flush();
+            stream.Flush(true);
+        }
+
+        if (File.Exists(path))
+        {
+            var backupPath = path + ".bak";
+            if (File.Exists(backupPath)) File.Delete(backupPath);
+            File.Replace(temporaryPath, path, backupPath, true);
+        }
+        else File.Move(temporaryPath, path);
     }
 
     private static void BackupCorruptFile(string path)

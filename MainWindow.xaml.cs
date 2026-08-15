@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim _iconLoader = new(4);
     private readonly Dictionary<Guid, Task<BitmapSource?>> _iconLoadTasks = [];
     private readonly DispatcherTimer _toastTimer;
+    private readonly DispatcherTimer _edgePageTimer;
     private LauncherSettings _settings;
     private LauncherSettings? _settingsSnapshot;
     private int _currentPage;
@@ -43,22 +44,39 @@ public partial class MainWindow : Window
     private bool _syncingSearch;
     private bool _spotlightDark = true;
     private int _spotlightSelectedIndex;
+    private int _pendingDropIndex = -1;
+    private int _edgePageDirection;
+    private uint _pendingHotkeyModifiers;
+    private int _pendingHotkeyVirtualKey;
+    private uint _registeredHotkeyModifiers;
+    private int _registeredHotkeyVirtualKey;
+    private UpdateInfo? _availableUpdate;
+    private MonitorBounds _activeMonitor;
+    private DragPreviewAdorner? _dragAdorner;
+    private System.Windows.Documents.AdornerLayer? _dragAdornerLayer;
 
     private int ItemsPerPage => _settings.Rows * _settings.Columns;
 
     public MainWindow()
     {
-        var desktop = CaptureDesktop();
+        _activeMonitor = GetCursorMonitor();
+        var desktop = CaptureDesktop(_activeMonitor.PixelBounds);
         InitializeComponent();
         DesktopBackground.Source = desktop;
 
-        var workArea = SystemParameters.WorkArea;
+        var workArea = _activeMonitor.WorkArea;
         _settings = AppDataStore.LoadSettings();
         _settings.Normalize(Math.Max(800, workArea.Width), Math.Max(600, workArea.Height));
         ApplyWindowSettings(_settings);
 
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.8) };
         _toastTimer.Tick += (_, _) => { _toastTimer.Stop(); ToastBorder.Visibility = Visibility.Collapsed; };
+        _edgePageTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+        _edgePageTimer.Tick += (_, _) =>
+        {
+            _edgePageTimer.Stop();
+            if (_edgePageDirection != 0) ChangePage(_edgePageDirection);
+        };
 
         Loaded += MainWindow_Loaded;
         SourceInitialized += MainWindow_SourceInitialized;
@@ -68,7 +86,12 @@ public partial class MainWindow : Window
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         _allItems.AddRange(AppDataStore.LoadItems().Where(item =>
-            item is not null && item.Id != Guid.Empty && !string.IsNullOrWhiteSpace(item.Name) && !string.IsNullOrWhiteSpace(item.TargetPath)));
+            item is not null && item.Id != Guid.Empty && !string.IsNullOrWhiteSpace(item.Name) &&
+            (item.TargetKind == LauncherTargetKind.PackagedApp
+                ? !string.IsNullOrWhiteSpace(item.AppUserModelId)
+                : !string.IsNullOrWhiteSpace(item.TargetPath))));
+        foreach (var item in _allItems) LauncherSearch.Prepare(item);
+        IconCacheService.Cleanup(_allItems.Select(item => item.Id));
         _visibleItems = [.. _allItems];
         _isLoaded = true;
         ApplyGridSettings();
@@ -76,6 +99,8 @@ public partial class MainWindow : Window
         RenderCurrentView();
         AnimateIn();
         FocusActiveSearch();
+        LauncherFooterHint.Text = $"Esc 返回桌面  ·  {FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyVirtualKey)} 随时呼出";
+        _ = CheckUpdatesOnStartupAsync();
     }
 
     private void MainWindow_SourceInitialized(object? sender, EventArgs e)
@@ -83,8 +108,13 @@ public partial class MainWindow : Window
         var handle = new WindowInteropHelper(this).Handle;
         _source = HwndSource.FromHwnd(handle);
         _source?.AddHook(WndProc);
-        if (!RegisterHotKey(handle, HotkeyId, 0x0004, 0x09))
-            ShowToast("Shift + Tab 已被其他程序占用");
+        if (!RegisterHotKey(handle, HotkeyId, _settings.HotkeyModifiers, (uint)_settings.HotkeyVirtualKey))
+            ShowToast($"{FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyVirtualKey)} 已被其他程序占用");
+        else
+        {
+            _registeredHotkeyModifiers = _settings.HotkeyModifiers;
+            _registeredHotkeyVirtualKey = _settings.HotkeyVirtualKey;
+        }
         ApplyDwmCorners(!_settings.FullScreen && !_settings.FloatingSearchMode);
     }
 
@@ -102,19 +132,57 @@ public partial class MainWindow : Window
             if (IsVisible) HideLauncher(); else ShowLauncher();
             handled = true;
         }
+        else if (msg == 0x02E0 || msg == 0x007E)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                _activeMonitor = GetCursorMonitor();
+                ApplyWindowSettings(_settings);
+                DesktopBackground.Source = CaptureDesktop(_activeMonitor.PixelBounds);
+            });
+        }
         return IntPtr.Zero;
     }
 
     private void AddButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog
+        var dialog = new AddAppsDialog(this);
+        if (dialog.ShowDialog() != true) return;
+        if (dialog.LocalPaths.Count > 0) AddFiles(dialog.LocalPaths);
+        if (dialog.SelectedPackagedApps.Count > 0) AddPackagedApps(dialog.SelectedPackagedApps);
+    }
+
+    private void AddPackagedApps(IEnumerable<PackagedAppInfo> apps)
+    {
+        var added = 0;
+        var duplicates = 0;
+        foreach (var app in apps)
         {
-            Title = "添加应用",
-            Filter = "应用和快捷方式 (*.exe;*.lnk;*.appref-ms)|*.exe;*.lnk;*.appref-ms",
-            Multiselect = true,
-            CheckFileExists = true
-        };
-        if (dialog.ShowDialog(this) == true) AddFiles(dialog.FileNames);
+            if (_allItems.Any(item => string.Equals(item.AppUserModelId, app.AppUserModelId, StringComparison.OrdinalIgnoreCase)))
+            {
+                duplicates++;
+                continue;
+            }
+            var item = new LauncherItemData
+            {
+                Id = Guid.NewGuid(),
+                Name = app.DisplayName,
+                TargetKind = LauncherTargetKind.PackagedApp,
+                AppUserModelId = app.AppUserModelId,
+                PackageFamilyName = app.PackageFamilyName
+            };
+            LauncherSearch.Prepare(item);
+            _allItems.Add(item);
+            added++;
+        }
+        if (added > 0)
+        {
+            PersistItems();
+            RefreshFilter();
+            _currentPage = Math.Max(0, (_visibleItems.Count - 1) / ItemsPerPage);
+            RenderCurrentView(true);
+        }
+        ShowToast(duplicates > 0 ? $"已添加 {added} 个应用，跳过 {duplicates} 个重复项" : $"已添加 {added} 个应用");
     }
 
     private void AddFiles(IEnumerable<string> paths)
@@ -141,12 +209,14 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            _allItems.Add(new LauncherItemData
+            var item = new LauncherItemData
             {
                 Id = Guid.NewGuid(),
                 Name = GetDefaultName(path),
                 TargetPath = path
-            });
+            };
+            LauncherSearch.Prepare(item);
+            _allItems.Add(item);
             added++;
         }
 
@@ -180,7 +250,11 @@ public partial class MainWindow : Window
     }
 
     private void Window_DragEnter(object sender, System.Windows.DragEventArgs e) => SetDragEffect(e);
-    private void Window_DragOver(object sender, System.Windows.DragEventArgs e) => SetDragEffect(e);
+    private void Window_DragOver(object sender, System.Windows.DragEventArgs e)
+    {
+        SetDragEffect(e);
+        if (e.Data.GetDataPresent(InternalDragFormat)) _dragAdorner?.Update(e.GetPosition(PageHost));
+    }
 
     private static void SetDragEffect(System.Windows.DragEventArgs e)
     {
@@ -259,15 +333,19 @@ public partial class MainWindow : Window
         if (!_isLoaded) return;
         var query = SpotlightSearchBox.Text.Trim();
         var expanded = query.Length > 0;
-        var results = expanded ? _visibleItems.Take(SpotlightMaxResults).ToList() : [];
+        var results = expanded
+            ? _visibleItems.Take(SpotlightMaxResults).ToList()
+            : _allItems.Where(item => item.LastLaunchedUtc.HasValue)
+                .OrderByDescending(item => item.LastLaunchedUtc)
+                .Take(5).ToList();
         _spotlightSelectedIndex = results.Count == 0 ? 0 : Math.Clamp(_spotlightSelectedIndex, 0, results.Count - 1);
         SpotlightResults.Children.Clear();
 
-        if (expanded && results.Count == 0)
+        if (results.Count == 0)
         {
             SpotlightResults.Children.Add(new TextBlock
             {
-                Text = "没有找到匹配的应用",
+                Text = expanded ? "没有找到匹配的应用" : "启动应用后，这里会显示最近使用",
                 Foreground = BrushFrom(_spotlightDark ? "#98FFFFFF" : "#78000000"),
                 FontSize = 14,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
@@ -280,20 +358,22 @@ public partial class MainWindow : Window
                 SpotlightResults.Children.Add(CreateSpotlightResult(results[index], index));
         }
 
-        SpotlightResultsBorder.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        SpotlightResultsBorder.Visibility = expanded || _allItems.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         SpotlightSubtitle.Text = _allItems.Count == 0
             ? "点击 + 添加你的第一个应用"
             : expanded
                 ? $"找到 {_visibleItems.Count} 个结果"
-                : "快速查找并启动应用";
+                : "最近使用";
 
         var resultHeight = results.Count == 0 ? 78 : results.Count * 72 + 18;
-        var targetHeight = expanded ? Math.Min(730, 190 + resultHeight) : 190;
+        var showResults = expanded || _allItems.Count > 0;
+        var targetHeight = showResults ? Math.Min(730, 190 + resultHeight) : 190;
         if (animate)
         {
             SpotlightCard.BeginAnimation(HeightProperty,
                 new DoubleAnimation(SpotlightCard.ActualHeight > 0 ? SpotlightCard.ActualHeight : SpotlightCard.Height, targetHeight,
-                    TimeSpan.FromMilliseconds(260)) { EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut } });
+                    TimeSpan.FromMilliseconds(260))
+                { EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut } });
         }
         else
         {
@@ -325,6 +405,7 @@ public partial class MainWindow : Window
         var image = new System.Windows.Controls.Image
         {
             Source = item.Icon,
+            Opacity = item.Icon is null ? 0 : 1,
             Width = iconSize,
             Height = iconSize,
             Stretch = Stretch.Uniform,
@@ -346,7 +427,7 @@ public partial class MainWindow : Window
         };
         var subtitle = new TextBlock
         {
-            Text = item.TargetPath,
+            Text = item.TargetKind == LauncherTargetKind.PackagedApp ? "Microsoft Store 应用" : item.TargetPath,
             FontSize = 11.5,
             Foreground = BrushFrom(_spotlightDark ? "#86FFFFFF" : "#70000000"),
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -451,6 +532,7 @@ public partial class MainWindow : Window
         var image = new System.Windows.Controls.Image
         {
             Source = item.Icon,
+            Opacity = item.Icon is null ? 0 : 1,
             Width = _settings.IconSize,
             Height = _settings.IconSize,
             Stretch = Stretch.Uniform,
@@ -534,6 +616,8 @@ public partial class MainWindow : Window
 
         image.Source = item.Icon;
         fallback.Visibility = item.Icon is null ? Visibility.Visible : Visibility.Collapsed;
+        if (item.Icon is not null && image.Opacity < 1)
+            image.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(120)));
     }
 
     private async Task<BitmapSource?> LoadIconWithThrottleAsync(LauncherItemData item)
@@ -541,7 +625,7 @@ public partial class MainWindow : Window
         await _iconLoader.WaitAsync();
         try
         {
-            return await Task.Run(() => LoadItemIcon(item));
+            return await IconCacheService.LoadAsync(item);
         }
         catch
         {
@@ -551,25 +635,6 @@ public partial class MainWindow : Window
         {
             _iconLoader.Release();
         }
-    }
-
-    private static BitmapSource? LoadItemIcon(LauncherItemData item)
-    {
-        if (!string.IsNullOrWhiteSpace(item.CustomIconPath) && File.Exists(item.CustomIconPath))
-        {
-            try
-            {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.UriSource = new Uri(Path.GetFullPath(item.CustomIconPath));
-                bitmap.EndInit();
-                bitmap.Freeze();
-                return bitmap;
-            }
-            catch { }
-        }
-        return GetShellIcon(item.TargetPath);
     }
 
     private ContextMenu CreateItemContextMenu(LauncherItemData item)
@@ -596,6 +661,7 @@ public partial class MainWindow : Window
         var dialog = new RenameDialog(this, item.Name);
         if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.Result)) return;
         item.Name = dialog.Result;
+        LauncherSearch.Prepare(item);
         PersistItems();
         RefreshFilter();
         RenderCurrentView(true);
@@ -613,6 +679,7 @@ public partial class MainWindow : Window
         try
         {
             item.CustomIconPath = AppDataStore.CopyCustomIcon(item.Id, dialog.FileName);
+            IconCacheService.Invalidate(item.Id);
             item.Icon = null;
             PersistItems();
             RenderCurrentView(true);
@@ -624,6 +691,7 @@ public partial class MainWindow : Window
     private void ResetItemIcon(LauncherItemData item)
     {
         AppDataStore.DeleteCustomIcon(item);
+        IconCacheService.Invalidate(item.Id);
         item.CustomIconPath = null;
         item.Icon = null;
         PersistItems();
@@ -636,6 +704,7 @@ public partial class MainWindow : Window
         if (System.Windows.MessageBox.Show(this, $"从 Centre 中删除“{item.Name}”？\n原始程序不会被删除。", "删除应用",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         AppDataStore.DeleteCustomIcon(item);
+        IconCacheService.Invalidate(item.Id);
         _allItems.Remove(item);
         PersistItems();
         RefreshFilter();
@@ -658,26 +727,48 @@ public partial class MainWindow : Window
 
         _suppressNextClick = true;
         var data = new System.Windows.DataObject(InternalDragFormat, _pressedItem.Id.ToString("D"));
-        System.Windows.DragDrop.DoDragDrop((DependencyObject)sender, data, System.Windows.DragDropEffects.Move);
+        if (sender is Button preview)
+        {
+            _dragAdornerLayer = System.Windows.Documents.AdornerLayer.GetAdornerLayer(PageHost);
+            if (_dragAdornerLayer is not null)
+            {
+                _dragAdorner = new DragPreviewAdorner(PageHost, preview);
+                _dragAdorner.Update(current);
+                _dragAdornerLayer.Add(_dragAdorner);
+            }
+        }
+        try { System.Windows.DragDrop.DoDragDrop((DependencyObject)sender, data, System.Windows.DragDropEffects.Move); }
+        finally
+        {
+            if (_dragAdorner is not null) _dragAdornerLayer?.Remove(_dragAdorner);
+            _dragAdorner = null;
+            _dragAdornerLayer = null;
+            DropIndicator.Visibility = Visibility.Collapsed;
+            _edgePageTimer.Stop();
+            _edgePageDirection = 0;
+        }
         _pressedItem = null;
         var resetTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
         resetTimer.Tick += (_, _) => { resetTimer.Stop(); _suppressNextClick = false; };
         resetTimer.Start();
     }
 
-    private static void LauncherButton_DragOver(object sender, System.Windows.DragEventArgs e)
+    private void LauncherButton_DragOver(object sender, System.Windows.DragEventArgs e)
     {
         if (!e.Data.GetDataPresent(InternalDragFormat)) return;
         e.Effects = System.Windows.DragDropEffects.Move;
+        UpdateDragVisuals(e);
         e.Handled = true;
     }
 
     private void LauncherButton_Drop(object sender, System.Windows.DragEventArgs e)
     {
         if (!TryGetDraggedItem(e, out var source) || (sender as Button)?.Tag is not LauncherItemData target || ReferenceEquals(source, target)) return;
+        var targetButton = (Button)sender;
+        var insertAfter = e.GetPosition(targetButton).X >= targetButton.ActualWidth / 2;
         _allItems.Remove(source);
         var targetIndex = _allItems.IndexOf(target);
-        _allItems.Insert(Math.Max(0, targetIndex), source);
+        _allItems.Insert(Math.Clamp(targetIndex + (insertAfter ? 1 : 0), 0, _allItems.Count), source);
         FinishReorder(e);
     }
 
@@ -685,18 +776,58 @@ public partial class MainWindow : Window
     {
         if (!e.Data.GetDataPresent(InternalDragFormat)) return;
         e.Effects = System.Windows.DragDropEffects.Move;
+        UpdateDragVisuals(e);
         e.Handled = true;
+    }
+
+    private void UpdateDragVisuals(System.Windows.DragEventArgs e)
+    {
+        _dragAdorner?.Update(e.GetPosition(PageHost));
+        var position = e.GetPosition(AppGrid);
+        UpdateDropIndicator(position);
+        var direction = position.X < 48 ? -1 : position.X > AppGrid.ActualWidth - 48 ? 1 : 0;
+        if (direction != _edgePageDirection)
+        {
+            _edgePageTimer.Stop();
+            _edgePageDirection = direction;
+            if (direction != 0) _edgePageTimer.Start();
+        }
     }
 
     private void AppGrid_Drop(object sender, System.Windows.DragEventArgs e)
     {
         if (!TryGetDraggedItem(e, out var source)) return;
-        var insertionIndex = Math.Min((_currentPage + 1) * ItemsPerPage, _allItems.Count);
+        var insertionIndex = _pendingDropIndex >= 0
+            ? Math.Clamp(_pendingDropIndex, 0, _allItems.Count)
+            : Math.Min((_currentPage + 1) * ItemsPerPage, _allItems.Count);
         var oldIndex = _allItems.IndexOf(source);
         _allItems.Remove(source);
         if (oldIndex < insertionIndex) insertionIndex--;
         _allItems.Insert(Math.Clamp(insertionIndex, 0, _allItems.Count), source);
         FinishReorder(e);
+    }
+
+    private void UpdateDropIndicator(System.Windows.Point position)
+    {
+        if (AppGrid.ActualWidth <= 0 || AppGrid.ActualHeight <= 0) return;
+        var cellWidth = AppGrid.ActualWidth / Math.Max(1, _settings.Columns);
+        var cellHeight = AppGrid.ActualHeight / Math.Max(1, _settings.Rows);
+        var column = Math.Clamp((int)(position.X / cellWidth), 0, _settings.Columns - 1);
+        var row = Math.Clamp((int)(position.Y / cellHeight), 0, _settings.Rows - 1);
+        var after = position.X - column * cellWidth >= cellWidth / 2;
+        var localIndex = Math.Min(row * _settings.Columns + column, Math.Max(0, _visibleItems.Count - _currentPage * ItemsPerPage));
+        var visibleTargetIndex = Math.Min(_currentPage * ItemsPerPage + localIndex, _visibleItems.Count);
+        if (visibleTargetIndex < _visibleItems.Count)
+        {
+            var targetIndex = _allItems.IndexOf(_visibleItems[visibleTargetIndex]);
+            _pendingDropIndex = Math.Max(0, targetIndex + (after ? 1 : 0));
+        }
+        else _pendingDropIndex = _allItems.Count;
+
+        DropIndicator.Height = Math.Max(48, cellHeight * .72);
+        Canvas.SetLeft(DropIndicator, Math.Clamp((column + (after ? 1 : 0)) * cellWidth - 2, 0, Math.Max(0, AppGrid.ActualWidth - 4)));
+        Canvas.SetTop(DropIndicator, row * cellHeight + (cellHeight - DropIndicator.Height) / 2);
+        DropIndicator.Visibility = Visibility.Visible;
     }
 
     private bool TryGetDraggedItem(System.Windows.DragEventArgs e, out LauncherItemData item)
@@ -714,6 +845,8 @@ public partial class MainWindow : Window
         RenderCurrentView(true);
         e.Effects = System.Windows.DragDropEffects.Move;
         e.Handled = true;
+        _pendingDropIndex = -1;
+        DropIndicator.Visibility = Visibility.Collapsed;
     }
 
     private void LauncherButton_Click(object sender, RoutedEventArgs e)
@@ -725,14 +858,24 @@ public partial class MainWindow : Window
 
     private void LaunchItem(LauncherItemData item)
     {
-        if (!File.Exists(item.TargetPath))
+        if (item.TargetKind == LauncherTargetKind.File && !File.Exists(item.TargetPath))
         {
             ShowToast($"找不到“{item.Name}”的目标文件");
             return;
         }
         try
         {
-            Process.Start(new ProcessStartInfo(item.TargetPath) { UseShellExecute = true });
+            var launched = item.TargetKind == LauncherTargetKind.PackagedApp
+                ? !string.IsNullOrWhiteSpace(item.AppUserModelId) && PackagedAppService.Launch(item.AppUserModelId)
+                : Process.Start(new ProcessStartInfo(item.TargetPath) { UseShellExecute = true }) is not null;
+            if (!launched)
+            {
+                ShowToast($"无法启动 {item.Name}，应用可能已卸载");
+                return;
+            }
+            item.LaunchCount++;
+            item.LastLaunchedUtc = DateTimeOffset.UtcNow;
+            PersistItems();
             HideLauncher();
         }
         catch (Exception ex) { ShowToast($"无法启动 {item.Name}：{ex.Message}"); }
@@ -781,9 +924,7 @@ public partial class MainWindow : Window
     private void RefreshFilter()
     {
         var query = (_settings.FloatingSearchMode ? SpotlightSearchBox.Text : SearchBox.Text).Trim();
-        _visibleItems = query.Length == 0
-            ? [.. _allItems]
-            : _allItems.Where(item => item.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase)).ToList();
+        _visibleItems = LauncherSearch.FilterAndRank(_allItems, query);
     }
 
     private void ClearSearchButton_Click(object sender, RoutedEventArgs e)
@@ -792,11 +933,125 @@ public partial class MainWindow : Window
         FocusActiveSearch();
     }
 
+    private void HotkeyTextBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftAlt or Key.RightAlt or Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin) return;
+        var modifiers = Keyboard.Modifiers;
+        uint nativeModifiers = 0;
+        if (modifiers.HasFlag(ModifierKeys.Alt)) nativeModifiers |= 0x0001;
+        if (modifiers.HasFlag(ModifierKeys.Control)) nativeModifiers |= 0x0002;
+        if (modifiers.HasFlag(ModifierKeys.Shift)) nativeModifiers |= 0x0004;
+        if (modifiers.HasFlag(ModifierKeys.Windows)) nativeModifiers |= 0x0008;
+        if (nativeModifiers == 0 || key is Key.None or Key.Escape)
+        {
+            ShowToast("快捷键必须包含 Ctrl、Alt、Shift 或 Win");
+            return;
+        }
+        _pendingHotkeyModifiers = nativeModifiers;
+        _pendingHotkeyVirtualKey = KeyInterop.VirtualKeyFromKey(key);
+        HotkeyTextBox.Text = FormatHotkey(_pendingHotkeyModifiers, _pendingHotkeyVirtualKey);
+    }
+
+    private void ResetHotkey_Click(object sender, RoutedEventArgs e) => SetPendingHotkey(0x0004, 0x09);
+    private void ShiftTabPreset_Click(object sender, RoutedEventArgs e) => SetPendingHotkey(0x0004, 0x09);
+    private void AltSpacePreset_Click(object sender, RoutedEventArgs e) => SetPendingHotkey(0x0001, 0x20);
+
+    private void SetPendingHotkey(uint modifiers, int virtualKey)
+    {
+        _pendingHotkeyModifiers = modifiers;
+        _pendingHotkeyVirtualKey = virtualKey;
+        HotkeyTextBox.Text = FormatHotkey(modifiers, virtualKey);
+    }
+
+    private bool TryApplyHotkey(uint modifiers, int virtualKey)
+    {
+        if (modifiers == _registeredHotkeyModifiers && virtualKey == _registeredHotkeyVirtualKey) return true;
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero) return false;
+        UnregisterHotKey(handle, HotkeyId);
+        if (RegisterHotKey(handle, HotkeyId, modifiers, (uint)virtualKey))
+        {
+            _registeredHotkeyModifiers = modifiers;
+            _registeredHotkeyVirtualKey = virtualKey;
+            return true;
+        }
+        RegisterHotKey(handle, HotkeyId, _registeredHotkeyModifiers, (uint)_registeredHotkeyVirtualKey);
+        return false;
+    }
+
+    private static string FormatHotkey(uint modifiers, int virtualKey)
+    {
+        var parts = new List<string>();
+        if ((modifiers & 0x0002) != 0) parts.Add("Ctrl");
+        if ((modifiers & 0x0001) != 0) parts.Add("Alt");
+        if ((modifiers & 0x0004) != 0) parts.Add("Shift");
+        if ((modifiers & 0x0008) != 0) parts.Add("Win");
+        parts.Add(KeyInterop.KeyFromVirtualKey(virtualKey).ToString());
+        return string.Join(" + ", parts);
+    }
+
+    private async Task CheckUpdatesOnStartupAsync()
+    {
+        if (!_settings.AutoCheckUpdates ||
+            (_settings.LastUpdateCheckUtc.HasValue && DateTimeOffset.UtcNow - _settings.LastUpdateCheckUtc.Value < TimeSpan.FromDays(1))) return;
+        await CheckUpdatesAsync(false);
+    }
+
+    private async void CheckUpdates_Click(object sender, RoutedEventArgs e) => await CheckUpdatesAsync(true);
+
+    private async Task CheckUpdatesAsync(bool showCurrentMessage)
+    {
+        try
+        {
+            var update = await UpdateService.CheckAsync();
+            _settings.LastUpdateCheckUtc = DateTimeOffset.UtcNow;
+            if (_settingsSnapshot is not null) _settingsSnapshot.LastUpdateCheckUtc = _settings.LastUpdateCheckUtc;
+            PersistUpdateMetadata();
+            if (update is null)
+            {
+                if (showCurrentMessage) ShowToast("当前已是最新版本");
+                return;
+            }
+            if (string.Equals(_settings.DismissedUpdateVersion, update.Version, StringComparison.OrdinalIgnoreCase)) return;
+            _availableUpdate = update;
+            UpdateBannerText.Text = $"发现新版本 {update.Version}";
+            UpdateBanner.Visibility = Visibility.Visible;
+        }
+        catch
+        {
+            if (showCurrentMessage) ShowToast("暂时无法检查更新");
+        }
+    }
+
+    private void ViewUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_availableUpdate is null) return;
+        Process.Start(new ProcessStartInfo(_availableUpdate.ReleaseUrl) { UseShellExecute = true });
+    }
+
+    private void DismissUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_availableUpdate is not null)
+        {
+            _settings.DismissedUpdateVersion = _availableUpdate.Version;
+            if (_settingsSnapshot is not null) _settingsSnapshot.DismissedUpdateVersion = _availableUpdate.Version;
+            PersistUpdateMetadata();
+        }
+        UpdateBanner.Visibility = Visibility.Collapsed;
+    }
+
+    private void PersistUpdateMetadata()
+    {
+        try { AppDataStore.SaveSettings(_settingsSnapshot ?? _settings); } catch { }
+    }
+
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
         if (SettingsLayer.Visibility == Visibility.Visible) return;
         _settingsSnapshot = _settings.Clone();
-        var workArea = SystemParameters.WorkArea;
+        var workArea = _activeMonitor.WorkArea;
         _isSettingsInitializing = true;
         WidthSlider.Maximum = Math.Max(800, workArea.Width);
         HeightSlider.Maximum = Math.Max(600, workArea.Height);
@@ -807,6 +1062,10 @@ public partial class MainWindow : Window
         ColumnsSlider.Value = _settings.Columns;
         RowsSlider.Value = _settings.Rows;
         IconSizeSlider.Value = _settings.IconSize;
+        _pendingHotkeyModifiers = _settings.HotkeyModifiers;
+        _pendingHotkeyVirtualKey = _settings.HotkeyVirtualKey;
+        HotkeyTextBox.Text = FormatHotkey(_pendingHotkeyModifiers, _pendingHotkeyVirtualKey);
+        AutoUpdateCheck.IsChecked = _settings.AutoCheckUpdates;
         _isSettingsInitializing = false;
         UpdateSettingsLabels();
 
@@ -840,7 +1099,7 @@ public partial class MainWindow : Window
 
     private LauncherSettings ReadSettingsControls()
     {
-        var workArea = SystemParameters.WorkArea;
+        var workArea = _activeMonitor.WorkArea;
         var settings = new LauncherSettings
         {
             FloatingSearchMode = FloatingSearchModeCheck.IsChecked == true,
@@ -849,7 +1108,12 @@ public partial class MainWindow : Window
             WindowHeight = Math.Round(HeightSlider.Value),
             Columns = (int)Math.Round(ColumnsSlider.Value),
             Rows = (int)Math.Round(RowsSlider.Value),
-            IconSize = Math.Round(IconSizeSlider.Value)
+            IconSize = Math.Round(IconSizeSlider.Value),
+            HotkeyModifiers = _pendingHotkeyModifiers,
+            HotkeyVirtualKey = _pendingHotkeyVirtualKey,
+            AutoCheckUpdates = AutoUpdateCheck.IsChecked == true,
+            LastUpdateCheckUtc = _settings.LastUpdateCheckUtc,
+            DismissedUpdateVersion = _settings.DismissedUpdateVersion
         };
         settings.Normalize(Math.Max(800, workArea.Width), Math.Max(600, workArea.Height));
         return settings;
@@ -857,7 +1121,14 @@ public partial class MainWindow : Window
 
     private void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
-        _settings = ReadSettingsControls();
+        var next = ReadSettingsControls();
+        if (!TryApplyHotkey(next.HotkeyModifiers, next.HotkeyVirtualKey))
+        {
+            ShowToast($"无法注册 {FormatHotkey(next.HotkeyModifiers, next.HotkeyVirtualKey)}，请更换组合键");
+            return;
+        }
+        _settings = next;
+        LauncherFooterHint.Text = $"Esc 返回桌面  ·  {FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyVirtualKey)} 随时呼出";
         try { AppDataStore.SaveSettings(_settings); ShowToast("设置已保存"); }
         catch (Exception ex) { ShowToast($"无法保存设置：{ex.Message}"); }
         _settingsSnapshot = null;
@@ -896,17 +1167,17 @@ public partial class MainWindow : Window
 
     private void ApplyWindowSettings(LauncherSettings settings)
     {
-        var workArea = SystemParameters.WorkArea;
+        var workArea = _activeMonitor.WorkArea;
         settings.Normalize(Math.Max(800, workArea.Width), Math.Max(600, workArea.Height));
         WindowState = WindowState.Normal;
         ResizeMode = ResizeMode.NoResize;
 
         if (settings.FullScreen || settings.FloatingSearchMode)
         {
-            Left = SystemParameters.VirtualScreenLeft;
-            Top = SystemParameters.VirtualScreenTop;
-            Width = SystemParameters.PrimaryScreenWidth;
-            Height = SystemParameters.PrimaryScreenHeight;
+            Left = _activeMonitor.Bounds.Left;
+            Top = _activeMonitor.Bounds.Top;
+            Width = _activeMonitor.Bounds.Width;
+            Height = _activeMonitor.Bounds.Height;
         }
         else
         {
@@ -1151,7 +1422,8 @@ public partial class MainWindow : Window
 
     private void ShowLauncher()
     {
-        DesktopBackground.Source = CaptureDesktop();
+        _activeMonitor = GetCursorMonitor();
+        DesktopBackground.Source = CaptureDesktop(_activeMonitor.PixelBounds);
         ApplyWindowSettings(_settings);
         ApplyDisplayMode();
         Show();
@@ -1159,6 +1431,17 @@ public partial class MainWindow : Window
         Topmost = true;
         AnimateIn();
         FocusActiveSearch();
+    }
+
+    public void ShowFromExternalInstance()
+    {
+        if (!IsVisible) ShowLauncher();
+        else
+        {
+            Topmost = true;
+            Activate();
+            FocusActiveSearch();
+        }
     }
 
     private void HideLauncher()
@@ -1209,11 +1492,10 @@ public partial class MainWindow : Window
         _toastTimer.Start();
     }
 
-    private static BitmapSource? CaptureDesktop()
+    private static BitmapSource? CaptureDesktop(Rectangle bounds)
     {
         try
         {
-            var bounds = new Rectangle(0, 0, GetSystemMetrics(0), GetSystemMetrics(1));
             using var full = new Bitmap(bounds.Width, bounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
             using (var graphics = Graphics.FromImage(full)) graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
             using var bitmap = new Bitmap(Math.Max(1, bounds.Width / 4), Math.Max(1, bounds.Height / 4), System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
@@ -1234,35 +1516,53 @@ public partial class MainWindow : Window
         catch { return null; }
     }
 
-    private static BitmapSource? GetShellIcon(string path)
+    private static MonitorBounds GetCursorMonitor()
     {
-        var info = new ShFileInfo();
-        var result = SHGetFileInfo(path, 0, ref info, (uint)Marshal.SizeOf(info), 0x000000100);
-        if (result == IntPtr.Zero || info.IconHandle == IntPtr.Zero) return null;
-        try
-        {
-            var source = Imaging.CreateBitmapSourceFromHIcon(info.IconHandle, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(128, 128));
-            source.Freeze();
-            return source;
-        }
-        finally { DestroyIcon(info.IconHandle); }
+        GetCursorPos(out var cursor);
+        var monitor = MonitorFromPoint(cursor, 2);
+        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        GetMonitorInfo(monitor, ref info);
+        uint dpiX = 96;
+        uint dpiY = 96;
+        try { GetDpiForMonitor(monitor, 0, out dpiX, out dpiY); } catch { }
+        var scaleX = Math.Max(1, dpiX) / 96d;
+        var scaleY = Math.Max(1, dpiY) / 96d;
+        var pixel = new Rectangle(info.Monitor.Left, info.Monitor.Top,
+            info.Monitor.Right - info.Monitor.Left, info.Monitor.Bottom - info.Monitor.Top);
+        var bounds = new Rect(info.Monitor.Left / scaleX, info.Monitor.Top / scaleY,
+            pixel.Width / scaleX, pixel.Height / scaleY);
+        var work = new Rect(info.Work.Left / scaleX, info.Work.Top / scaleY,
+            (info.Work.Right - info.Work.Left) / scaleX, (info.Work.Bottom - info.Work.Top) / scaleY);
+        return new MonitorBounds(pixel, bounds, work);
     }
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct ShFileInfo
+    private readonly record struct MonitorBounds(Rectangle PixelBounds, Rect Bounds, Rect WorkArea);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
     {
-        public IntPtr IconHandle;
-        public int IconIndex;
-        public uint Attributes;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string DisplayName;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string TypeName;
+        public int X;
+        public int Y;
     }
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SHGetFileInfo(string path, uint attributes, ref ShFileInfo info, uint size, uint flags);
-    [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr handle);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo
+    {
+        public int Size;
+        public NativeRect Monitor;
+        public NativeRect Work;
+        public uint Flags;
+    }
+
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out NativePoint point);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(NativePoint point, uint flags);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr handle);
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hwnd, int id);
-    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 }

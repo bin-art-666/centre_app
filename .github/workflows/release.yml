@@ -1,0 +1,84 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore centre_app.slnx
+      - name: Test
+        run: dotnet test tests/Centre.Tests/Centre.Tests.csproj -c Release --no-restore
+      - name: Build
+        run: dotnet build centre_app.csproj -c Release --no-restore -warnaserror
+      - name: Verify tag version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content centre_app.csproj
+          $projectVersion = $project.Project.PropertyGroup.Version
+          $tagVersion = '${{ github.ref_name }}'.TrimStart('v')
+          if ($projectVersion -ne $tagVersion) { throw "Tag $tagVersion does not match project version $projectVersion" }
+      - name: Publish x64
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: dotnet publish centre_app.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o artifacts/publish
+      - name: Sign application when certificate is configured
+        if: startsWith(github.ref, 'refs/tags/v') && env.CERTIFICATE_BASE64 != ''
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes('certificate.pfx', [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f certificate.pfx /p $env:CERTIFICATE_PASSWORD artifacts/publish/Centre.exe
+      - name: Build portable archive and installer
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          Compress-Archive -Path artifacts/publish/* -DestinationPath "artifacts/Centre-${{ github.ref_name }}-win-x64-portable.zip"
+          choco install innosetup --no-progress -y
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" installer/Centre.iss
+      - name: Sign installer when certificate is configured
+        if: startsWith(github.ref, 'refs/tags/v') && env.CERTIFICATE_BASE64 != ''
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
+          $installer = Get-ChildItem artifacts -Filter '*-setup.exe' | Select-Object -First 1
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f certificate.pfx /p $env:CERTIFICATE_PASSWORD $installer.FullName
+          Remove-Item certificate.pfx -Force
+      - name: Create checksums
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash)  $($_.Name)" } | Set-Content artifacts/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: Centre-${{ github.ref_name }}
+          path: |
+            artifacts/*.zip
+            artifacts/*.exe
+            artifacts/SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/*.zip
+            artifacts/*.exe
+            artifacts/SHA256SUMS.txt
