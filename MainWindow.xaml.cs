@@ -52,8 +52,7 @@ public partial class MainWindow : Window
     private int _registeredHotkeyVirtualKey;
     private UpdateInfo? _availableUpdate;
     private MonitorBounds _activeMonitor;
-    private DragPreviewAdorner? _dragAdorner;
-    private System.Windows.Documents.AdornerLayer? _dragAdornerLayer;
+    private DragPreviewPopup? _dragPreviewPopup;
 
     private int ItemsPerPage => _settings.Rows * _settings.Columns;
 
@@ -253,7 +252,7 @@ public partial class MainWindow : Window
     private void Window_DragOver(object sender, System.Windows.DragEventArgs e)
     {
         SetDragEffect(e);
-        if (e.Data.GetDataPresent(InternalDragFormat)) _dragAdorner?.Update(e.GetPosition(PageHost));
+        if (e.Data.GetDataPresent(InternalDragFormat)) _dragPreviewPopup?.Update(e.GetPosition(PageHost));
     }
 
     private static void SetDragEffect(System.Windows.DragEventArgs e)
@@ -727,22 +726,19 @@ public partial class MainWindow : Window
 
         _suppressNextClick = true;
         var data = new System.Windows.DataObject(InternalDragFormat, _pressedItem.Id.ToString("D"));
-        if (sender is Button preview)
+        var draggedButton = sender as Button;
+        if (draggedButton is not null)
         {
-            _dragAdornerLayer = System.Windows.Documents.AdornerLayer.GetAdornerLayer(PageHost);
-            if (_dragAdornerLayer is not null)
-            {
-                _dragAdorner = new DragPreviewAdorner(PageHost, preview);
-                _dragAdorner.Update(current);
-                _dragAdornerLayer.Add(_dragAdorner);
-            }
+            _dragPreviewPopup = new DragPreviewPopup(PageHost, draggedButton);
+            _dragPreviewPopup.Show(e.GetPosition(PageHost));
+            draggedButton.Opacity = .28;
         }
         try { System.Windows.DragDrop.DoDragDrop((DependencyObject)sender, data, System.Windows.DragDropEffects.Move); }
         finally
         {
-            if (_dragAdorner is not null) _dragAdornerLayer?.Remove(_dragAdorner);
-            _dragAdorner = null;
-            _dragAdornerLayer = null;
+            draggedButton?.SetCurrentValue(OpacityProperty, 1d);
+            _dragPreviewPopup?.Dispose();
+            _dragPreviewPopup = null;
             DropIndicator.Visibility = Visibility.Collapsed;
             _edgePageTimer.Stop();
             _edgePageDirection = 0;
@@ -782,7 +778,7 @@ public partial class MainWindow : Window
 
     private void UpdateDragVisuals(System.Windows.DragEventArgs e)
     {
-        _dragAdorner?.Update(e.GetPosition(PageHost));
+        _dragPreviewPopup?.Update(e.GetPosition(PageHost));
         var position = e.GetPosition(AppGrid);
         UpdateDropIndicator(position);
         var direction = position.X < 48 ? -1 : position.X > AppGrid.ActualWidth - 48 ? 1 : 0;
