@@ -73,7 +73,7 @@ public sealed class AddAppsDialog : Window
     {
         var panel = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
         panel.Children.Add(new TextBlock { Text = "选择 EXE、LNK 或 APPREF-MS", FontSize = 17, HorizontalAlignment = HorizontalAlignment.Center });
-        panel.Children.Add(new TextBlock { Text = "支持多选，也可以继续直接拖入 Centre", Foreground = new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)), Margin = new Thickness(0, 8, 0, 20), HorizontalAlignment = HorizontalAlignment.Center });
+        panel.Children.Add(new TextBlock { Text = "支持多选，也可以继续直接拖入应用中心", Foreground = new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)), Margin = new Thickness(0, 8, 0, 20), HorizontalAlignment = HorizontalAlignment.Center });
         var browse = new Button { Content = "浏览文件…", Width = 130, Height = 40 };
         browse.Click += (_, _) =>
         {

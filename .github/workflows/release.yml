@@ -44,12 +44,11 @@ jobs:
         run: |
           [IO.File]::WriteAllBytes('certificate.pfx', [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
-          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f certificate.pfx /p $env:CERTIFICATE_PASSWORD artifacts/publish/Centre.exe
-      - name: Build portable archive and installer
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f certificate.pfx /p $env:CERTIFICATE_PASSWORD artifacts/publish/应用中心.exe
+      - name: Build installer
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          Compress-Archive -Path artifacts/publish/* -DestinationPath "artifacts/Centre-${{ github.ref_name }}-win-x64-portable.zip"
           choco install innosetup --no-progress -y
           $version = '${{ github.ref_name }}'.TrimStart('v')
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" installer/Centre.iss
@@ -69,9 +68,8 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          name: Centre-${{ github.ref_name }}
+          name: 应用中心-${{ github.ref_name }}
           path: |
-            artifacts/*.zip
             artifacts/*.exe
             artifacts/SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
@@ -79,6 +77,5 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/*.zip
             artifacts/*.exe
             artifacts/SHA256SUMS.txt

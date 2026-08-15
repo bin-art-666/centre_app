@@ -27,7 +27,7 @@ public static class UpdateService
         var local = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0);
         if (remote <= local) return null;
         var name = root.TryGetProperty("name", out var releaseName) ? releaseName.GetString() : null;
-        return new UpdateInfo(tag!, url, string.IsNullOrWhiteSpace(name) ? $"Centre {tag}" : name!);
+        return new UpdateInfo(tag!, url, string.IsNullOrWhiteSpace(name) ? $"应用中心 {tag}" : name!);
     }
 
     internal static bool IsNewer(string remoteVersion, Version localVersion) =>
@@ -36,7 +36,7 @@ public static class UpdateService
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Centre", "1.1"));
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ApplicationCenter", "1.1"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         return client;
     }

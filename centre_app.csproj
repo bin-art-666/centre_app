@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <AssemblyName>Centre</AssemblyName>
-    <Product>Centre</Product>
+    <AssemblyName>应用中心</AssemblyName>
+    <Product>应用中心</Product>
     <ApplicationIcon>Assets\Centre.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Version>1.1.0</Version>

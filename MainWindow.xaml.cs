@@ -700,7 +700,7 @@ public partial class MainWindow : Window
 
     private void RemoveItem(LauncherItemData item)
     {
-        if (System.Windows.MessageBox.Show(this, $"从 Centre 中删除“{item.Name}”？\n原始程序不会被删除。", "删除应用",
+        if (System.Windows.MessageBox.Show(this, $"从应用中心中删除“{item.Name}”？\n原始程序不会被删除。", "删除应用",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         AppDataStore.DeleteCustomIcon(item);
         IconCacheService.Invalidate(item.Id);
