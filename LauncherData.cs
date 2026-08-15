@@ -40,6 +40,7 @@ public sealed class LauncherSettings
     public int Columns { get; set; } = 8;
     public int Rows { get; set; } = 5;
     public double IconSize { get; set; } = 76;
+    public double BackgroundBlur { get; set; } = 18;
     public uint HotkeyModifiers { get; set; } = 0x0004;
     public int HotkeyVirtualKey { get; set; } = 0x09;
     public bool AutoCheckUpdates { get; set; } = true;
@@ -55,6 +56,7 @@ public sealed class LauncherSettings
         Columns = Columns,
         Rows = Rows,
         IconSize = IconSize,
+        BackgroundBlur = BackgroundBlur,
         HotkeyModifiers = HotkeyModifiers,
         HotkeyVirtualKey = HotkeyVirtualKey,
         AutoCheckUpdates = AutoCheckUpdates,
@@ -69,6 +71,7 @@ public sealed class LauncherSettings
         Columns = Math.Clamp(Columns, 4, 12);
         Rows = Math.Clamp(Rows, 3, 8);
         IconSize = Math.Clamp(IconSize, 48, 128);
+        BackgroundBlur = Math.Clamp(BackgroundBlur, 0, 40);
         if (HotkeyModifiers == 0 || HotkeyVirtualKey is < 0x08 or > 0xFE)
         {
             HotkeyModifiers = 0x0004;

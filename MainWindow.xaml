@@ -232,6 +232,8 @@
                             <Slider x:Name="RowsSlider" Minimum="3" Maximum="8" TickFrequency="1" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
                             <Grid><TextBlock Text="图标大小" Foreground="White"/><TextBlock x:Name="IconSizeValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
                             <Slider x:Name="IconSizeSlider" Minimum="48" Maximum="128" TickFrequency="4" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
+                            <Grid><TextBlock Text="背景模糊强度" Foreground="White"/><TextBlock x:Name="BackgroundBlurValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
+                            <Slider x:Name="BackgroundBlurSlider" Minimum="0" Maximum="40" TickFrequency="2" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
 
                             <Separator Background="#35FFFFFF" Margin="0,8,0,20"/>
                             <TextBlock Text="唤出快捷键" Foreground="White" Margin="0,0,0,8"/>

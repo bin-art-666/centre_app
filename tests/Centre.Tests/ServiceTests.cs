@@ -29,5 +29,16 @@ public sealed class ServiceTests : IDisposable
     public void NonShortcutDoesNotResolveAsLink() =>
         Assert.Null(centre_app.ShortcutResolver.Resolve("not-a-shortcut.exe"));
 
+    [Theory]
+    [InlineData(-5, 0)]
+    [InlineData(22, 22)]
+    [InlineData(99, 40)]
+    public void BackgroundBlurIsNormalized(double input, double expected)
+    {
+        var settings = new centre_app.LauncherSettings { BackgroundBlur = input };
+        settings.Normalize(1920, 1080);
+        Assert.Equal(expected, settings.BackgroundBlur);
+    }
+
     public void Dispose() { try { File.Delete(_file); } catch { } }
 }

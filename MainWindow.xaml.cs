@@ -1062,6 +1062,7 @@ public partial class MainWindow : Window
         ColumnsSlider.Value = _settings.Columns;
         RowsSlider.Value = _settings.Rows;
         IconSizeSlider.Value = _settings.IconSize;
+        BackgroundBlurSlider.Value = _settings.BackgroundBlur;
         _pendingHotkeyModifiers = _settings.HotkeyModifiers;
         _pendingHotkeyVirtualKey = _settings.HotkeyVirtualKey;
         HotkeyTextBox.Text = FormatHotkey(_pendingHotkeyModifiers, _pendingHotkeyVirtualKey);
@@ -1095,6 +1096,9 @@ public partial class MainWindow : Window
         ColumnsValueText.Text = $"{Math.Round(ColumnsSlider.Value):0} 列";
         RowsValueText.Text = $"{Math.Round(RowsSlider.Value):0} 行";
         IconSizeValueText.Text = $"{Math.Round(IconSizeSlider.Value):0} px";
+        BackgroundBlurValueText.Text = BackgroundBlurSlider.Value <= 0
+            ? "关闭"
+            : $"{Math.Round(BackgroundBlurSlider.Value):0} px";
     }
 
     private LauncherSettings ReadSettingsControls()
@@ -1109,6 +1113,7 @@ public partial class MainWindow : Window
             Columns = (int)Math.Round(ColumnsSlider.Value),
             Rows = (int)Math.Round(RowsSlider.Value),
             IconSize = Math.Round(IconSizeSlider.Value),
+            BackgroundBlur = Math.Round(BackgroundBlurSlider.Value),
             HotkeyModifiers = _pendingHotkeyModifiers,
             HotkeyVirtualKey = _pendingHotkeyVirtualKey,
             AutoCheckUpdates = AutoUpdateCheck.IsChecked == true,
@@ -1219,6 +1224,23 @@ public partial class MainWindow : Window
             PrimaryDimmer.Fill = BrushFrom("#72080B12");
             EdgeDimmer.Opacity = 1;
         }
+        ApplyBackgroundBlur();
+    }
+
+    private void ApplyBackgroundBlur()
+    {
+        var radius = _settings.BackgroundBlur;
+        DesktopBackground.Margin = radius <= 0
+            ? new Thickness(0)
+            : new Thickness(-Math.Ceiling(radius * 1.5));
+        DesktopBackground.Effect = radius <= 0
+            ? null
+            : new System.Windows.Media.Effects.BlurEffect
+            {
+                Radius = radius,
+                KernelType = System.Windows.Media.Effects.KernelType.Gaussian,
+                RenderingBias = System.Windows.Media.Effects.RenderingBias.Performance
+            };
     }
 
     private void ApplySpotlightTheme()
