@@ -18,9 +18,6 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        // This launcher is mostly static UI. Avoid loading the vendor D3D/media
-        // driver stack and retaining GPU render targets for a window-sized surface.
-        RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
         try { SetCurrentProcessExplicitAppUserModelID(AppUserModelId); } catch { }
         var userId = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
         var instanceKey = userId.Replace('-', '_').Replace('\\', '_');
@@ -33,6 +30,10 @@ public partial class App : Application
             return;
         }
 
+        var startupSettings = AppDataStore.LoadSettings();
+        RenderOptions.ProcessRenderMode = startupSettings.SoftwareRenderingCompatibility
+            ? RenderMode.SoftwareOnly
+            : RenderMode.Default;
         base.OnStartup(e);
         MainWindow = new MainWindow();
         MainWindow.Show();

@@ -5,21 +5,16 @@ using System.Windows.Media;
 
 namespace centre_app;
 
-public sealed class RenameDialog : Window
+public sealed class RemoveAppDialog : Window
 {
-    private static readonly SolidColorBrush MutedText = Brush("#8FFFFFFF");
-    private readonly TextBox _textBox;
+    private static readonly SolidColorBrush MutedText = Brush("#9FFFFFFF");
 
-    public string Result => _textBox.Text.Trim();
-
-    public RenameDialog(Window owner, string currentName)
+    public RemoveAppDialog(Window owner, string appName)
     {
         Owner = owner;
-        Title = "重命名";
-        // Keep transparent padding around the card so its shadow is not clipped into
-        // a rectangular edge by the bounds of the native window.
-        Width = 492;
-        Height = 316;
+        Title = "删除应用";
+        Width = 502;
+        Height = 314;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -29,13 +24,7 @@ public sealed class RenameDialog : Window
         ShowInTaskbar = false;
         FontFamily = new FontFamily("Segoe UI Variable Text,Microsoft YaHei UI,Segoe UI");
 
-        _textBox = CreateTextBox(currentName);
-        Content = CreateSurface();
-        Loaded += (_, _) =>
-        {
-            _textBox.Focus();
-            _textBox.SelectAll();
-        };
+        Content = CreateSurface(appName);
         PreviewKeyDown += (_, args) =>
         {
             if (args.Key != Key.Escape) return;
@@ -44,7 +33,7 @@ public sealed class RenameDialog : Window
         };
     }
 
-    private Border CreateSurface()
+    private Border CreateSurface(string appName)
     {
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(66) });
@@ -52,23 +41,55 @@ public sealed class RenameDialog : Window
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(74) });
         root.Children.Add(CreateHeader());
 
-        var form = new StackPanel { Margin = new Thickness(26, 22, 26, 18) };
-        form.Children.Add(new TextBlock
+        var content = new Grid { Margin = new Thickness(26, 21, 26, 18) };
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var warning = new Border
         {
-            Text = "应用名称",
-            FontSize = 13.5,
-            FontWeight = FontWeights.SemiBold
+            Width = 54,
+            Height = 54,
+            CornerRadius = new CornerRadius(17),
+            Background = Brush("#25FF5F6D"),
+            BorderBrush = Brush("#4AFF7380"),
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Top,
+            Child = new TextBlock
+            {
+                Text = "!",
+                Foreground = Brush("#FFFFA2AA"),
+                FontSize = 30,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+        content.Children.Add(warning);
+        var text = new StackPanel { Margin = new Thickness(17, 1, 0, 0) };
+        text.Children.Add(new TextBlock
+        {
+            Text = $"移除“{appName}”？",
+            FontSize = 18,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis
         });
-        form.Children.Add(new TextBlock
+        text.Children.Add(new TextBlock
         {
-            Text = "修改应用在启动中心显示的名称",
-            FontSize = 11.5,
+            Text = "该项目将从应用中心移除。",
+            FontSize = 13,
             Foreground = MutedText,
-            Margin = new Thickness(0, 5, 0, 12)
+            Margin = new Thickness(0, 9, 0, 0)
         });
-        form.Children.Add(_textBox);
-        Grid.SetRow(form, 1);
-        root.Children.Add(form);
+        text.Children.Add(new TextBlock
+        {
+            Text = "原始程序、快捷方式或文件夹不会被删除。",
+            FontSize = 12,
+            Foreground = Brush("#70FFFFFF"),
+            Margin = new Thickness(0, 5, 0, 0)
+        });
+        Grid.SetColumn(text, 1);
+        content.Children.Add(text);
+        Grid.SetRow(content, 1);
+        root.Children.Add(content);
 
         var footer = new Grid { Background = Brushes.Transparent };
         footer.Children.Add(new Border
@@ -89,11 +110,11 @@ public sealed class RenameDialog : Window
         var cancel = CreateButton("取消", false);
         cancel.Margin = new Thickness(0, 0, 10, 0);
         cancel.Click += (_, _) => { DialogResult = false; Close(); };
-        var save = CreateButton("保存", true);
-        save.IsDefault = true;
-        save.Click += (_, _) => Save();
+        var remove = CreateButton("移除", true);
+        remove.IsDefault = true;
+        remove.Click += (_, _) => { DialogResult = true; Close(); };
         buttons.Children.Add(cancel);
-        buttons.Children.Add(save);
+        buttons.Children.Add(remove);
         footer.Children.Add(buttons);
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);
@@ -122,13 +143,23 @@ public sealed class RenameDialog : Window
         var header = new Grid { Background = Brushes.Transparent };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var divider = new Border
+        {
+            Height = 1,
+            Margin = new Thickness(24, 0, 24, 0),
+            Background = Brush("#14FFFFFF"),
+            VerticalAlignment = VerticalAlignment.Bottom,
+            IsHitTestVisible = false
+        };
+        Grid.SetColumnSpan(divider, 2);
+        header.Children.Add(divider);
         header.MouseLeftButtonDown += (_, args) =>
         {
             if (args.ButtonState == MouseButtonState.Pressed) DragMove();
         };
         header.Children.Add(new TextBlock
         {
-            Text = "重命名应用",
+            Text = "删除应用",
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(24, 0, 0, 0),
@@ -155,68 +186,17 @@ public sealed class RenameDialog : Window
         return header;
     }
 
-    private static TextBox CreateTextBox(string value)
-    {
-        var box = new TextBox
-        {
-            Text = value,
-            Height = 44,
-            Padding = new Thickness(13, 0, 13, 0),
-            FontSize = 15,
-            Foreground = Brushes.White,
-            CaretBrush = Brushes.White,
-            Background = Brush("#14FFFFFF"),
-            BorderBrush = Brush("#30FFFFFF"),
-            BorderThickness = new Thickness(1),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            SelectionBrush = Brush("#884F8CFF"),
-            FocusVisualStyle = null
-        };
-        var border = new FrameworkElementFactory(typeof(Border));
-        border.Name = "InputSurface";
-        border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
-        border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
-        border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
-        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(11));
-        var host = new FrameworkElementFactory(typeof(ScrollViewer));
-        host.Name = "PART_ContentHost";
-        host.SetValue(Control.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
-        host.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Stretch);
-        border.AppendChild(host);
-        var template = new ControlTemplate(typeof(TextBox)) { VisualTree = border };
-        var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Setter(Border.BorderBrushProperty, Brush("#4AFFFFFF"), "InputSurface"));
-        template.Triggers.Add(hover);
-        var focused = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
-        focused.Setters.Add(new Setter(Border.BorderBrushProperty, Brush("#FF6DA0FF"), "InputSurface"));
-        focused.Setters.Add(new Setter(Border.BackgroundProperty, Brush("#1DFFFFFF"), "InputSurface"));
-        template.Triggers.Add(focused);
-        box.Template = template;
-        return box;
-    }
-
-    private void Save()
-    {
-        if (string.IsNullOrWhiteSpace(Result))
-        {
-            _textBox.Focus();
-            return;
-        }
-        DialogResult = true;
-        Close();
-    }
-
-    private static Button CreateButton(string text, bool primary) => new()
+    private static Button CreateButton(string text, bool destructive) => new()
     {
         Content = text,
         Width = 96,
         Height = 38,
         Foreground = Brushes.White,
-        Background = primary ? Brush("#4F8CFF") : Brush("#15FFFFFF"),
-        BorderBrush = primary ? Brush("#6DA0FF") : Brush("#28FFFFFF"),
+        Background = destructive ? Brush("#E5525F") : Brush("#15FFFFFF"),
+        BorderBrush = destructive ? Brush("#FF7380") : Brush("#28FFFFFF"),
         BorderThickness = new Thickness(1),
         FontSize = 13,
-        FontWeight = primary ? FontWeights.SemiBold : FontWeights.Normal,
+        FontWeight = destructive ? FontWeights.SemiBold : FontWeights.Normal,
         Cursor = Cursors.Hand,
         FocusVisualStyle = null,
         Template = CreateButtonTemplate(11)

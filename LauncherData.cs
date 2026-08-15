@@ -42,8 +42,10 @@ public sealed class LauncherSettings
     public int Columns { get; set; } = 8;
     public int Rows { get; set; } = 5;
     public double IconSize { get; set; } = 64;
+    public bool UseIconMask { get; set; }
     public bool EnablePinyinSearch { get; set; }
     public bool StaticBlackBackground { get; set; }
+    public bool SoftwareRenderingCompatibility { get; set; }
     public double BackgroundBlur { get; set; } = 18;
     public uint HotkeyModifiers { get; set; }
     public int HotkeyVirtualKey { get; set; } = 0x12;
@@ -63,8 +65,10 @@ public sealed class LauncherSettings
         Columns = Columns,
         Rows = Rows,
         IconSize = IconSize,
+        UseIconMask = UseIconMask,
         EnablePinyinSearch = EnablePinyinSearch,
         StaticBlackBackground = StaticBlackBackground,
+        SoftwareRenderingCompatibility = SoftwareRenderingCompatibility,
         BackgroundBlur = BackgroundBlur,
         HotkeyModifiers = HotkeyModifiers,
         HotkeyVirtualKey = HotkeyVirtualKey,

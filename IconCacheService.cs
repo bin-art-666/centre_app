@@ -10,6 +10,9 @@ namespace centre_app;
 
 public static class IconCacheService
 {
+    public static Task<BitmapSource?> LoadFilePreviewAsync(string path) =>
+        Task.Run(() => ExtractFileIcon(path));
+
     public static async Task<BitmapSource?> LoadAsync(LauncherItemData item)
     {
         if (!string.IsNullOrWhiteSpace(item.CustomIconPath) && File.Exists(item.CustomIconPath))
@@ -56,11 +59,11 @@ public static class IconCacheService
         if (item.TargetKind == LauncherTargetKind.PackagedApp && !string.IsNullOrWhiteSpace(item.AppUserModelId))
         {
             var app = await PackagedAppService.FindAsync(item.AppUserModelId, item.PackageFamilyName);
-            identity = $"icon-v2|uwp|{item.AppUserModelId}|{app?.PackageFullName}";
+            identity = $"icon-v4|uwp|{item.AppUserModelId}|{app?.PackageFullName}";
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..20];
         }
 
-        var builder = new StringBuilder("icon-v2|file|").Append(Path.GetFullPath(item.TargetPath));
+        var builder = new StringBuilder("icon-v4|file|").Append(Path.GetFullPath(item.TargetPath));
         AppendFileIdentity(builder, item.TargetPath);
         if (ShortcutResolver.Resolve(item.TargetPath) is { } shortcut)
         {
@@ -85,18 +88,34 @@ public static class IconCacheService
 
     private static BitmapSource? ExtractFileIcon(string path)
     {
-        if (GetHighResolutionShellIcon(path) is { } shellIcon) return shellIcon;
-
         var shortcut = ShortcutResolver.Resolve(path);
-        if (shortcut is { TargetPath.Length: > 0 } && File.Exists(shortcut.TargetPath) &&
-            GetHighResolutionShellIcon(shortcut.TargetPath) is { } targetIcon) return targetIcon;
         if (shortcut is { IconPath.Length: > 0 } && File.Exists(shortcut.IconPath) &&
             ExtractIndexedIcon(shortcut.IconPath, shortcut.IconIndex) is { } explicitIcon) return explicitIcon;
+        if (shortcut is { TargetPath.Length: > 0 } && File.Exists(shortcut.TargetPath) &&
+            ExtractIndexedIcon(shortcut.TargetPath, 0) is { } targetIcon) return targetIcon;
+
+        // Asking the shell for a .lnk icon also returns Windows' shortcut-arrow overlay.
+        // Only use the original path after resolving shortcuts so launcher icons stay clean.
+        if (GetHighResolutionShellIcon(path) is { } shellIcon) return shellIcon;
         return GetLegacyShellIcon(path);
     }
 
     private static BitmapSource? ExtractIndexedIcon(string path, int index)
     {
+        var requestedSize = (256u << 16) | 256u;
+        if (SHDefExtractIcon(path, index, 0, out var highResolution, out var small, requestedSize) >= 0 &&
+            highResolution != IntPtr.Zero)
+        {
+            try { return FromIconHandle(highResolution); }
+            finally
+            {
+                DestroyIcon(highResolution);
+                if (small != IntPtr.Zero && small != highResolution) DestroyIcon(small);
+            }
+        }
+        if (highResolution != IntPtr.Zero) DestroyIcon(highResolution);
+        if (small != IntPtr.Zero && small != highResolution) DestroyIcon(small);
+
         var large = new IntPtr[1];
         if (ExtractIconEx(path, index, large, null, 1) == 0 || large[0] == IntPtr.Zero) return null;
         try { return FromIconHandle(large[0]); }
@@ -212,6 +231,7 @@ public static class IconCacheService
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern int SHCreateItemFromParsingName(string path, IntPtr bindContext, ref Guid interfaceId, out IShellItemImageFactory? imageFactory);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SHGetFileInfo(string path, uint attributes, ref ShFileInfo info, uint size, uint flags);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern uint ExtractIconEx(string file, int index, IntPtr[] largeIcons, IntPtr[]? smallIcons, uint iconCount);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern int SHDefExtractIcon(string iconFile, int iconIndex, uint flags, out IntPtr largeIcon, out IntPtr smallIcon, uint iconSize);
     [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr handle);
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr handle);
 }

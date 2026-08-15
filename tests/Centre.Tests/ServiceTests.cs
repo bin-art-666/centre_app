@@ -40,5 +40,25 @@ public sealed class ServiceTests : IDisposable
         Assert.Equal(expected, settings.BackgroundBlur);
     }
 
+    [Fact]
+    public void HighEndIntegratedGraphicsProfileUsesModerateParallelism()
+    {
+        var profile = centre_app.PerformanceProfile.Create(22, 32L * 1024 * 1024 * 1024);
+
+        Assert.Equal(6, profile.IconLoadConcurrency);
+        Assert.True(profile.UseLowLatencyGc);
+        Assert.Equal(150, profile.PageAnimationDurationMs);
+        Assert.Equal(30, profile.PageSlideDistance);
+    }
+
+    [Fact]
+    public void LowMemoryProfileAvoidsLatencyAndParallelismPressure()
+    {
+        var profile = centre_app.PerformanceProfile.Create(4, 8L * 1024 * 1024 * 1024);
+
+        Assert.Equal(2, profile.IconLoadConcurrency);
+        Assert.False(profile.UseLowLatencyGc);
+    }
+
     public void Dispose() { try { File.Delete(_file); } catch { } }
 }

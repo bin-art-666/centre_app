@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -20,17 +21,28 @@ public partial class MainWindow : Window
     private const uint ModNoRepeat = 0x4000;
     private const string InternalDragFormat = "Centre.LauncherItem";
     private const int SpotlightMaxResults = 7;
+    private static readonly System.Windows.Media.FontFamily LauncherFont = new("Segoe UI Variable Text,Segoe UI");
+    private static readonly System.Windows.Media.FontFamily MenuFont = new("Segoe UI Variable Text,Microsoft YaHei UI,Segoe UI");
+    private static readonly System.Windows.Media.Effects.DropShadowEffect LauncherLabelShadow = CreateLauncherLabelShadow();
+    private static readonly Dictionary<string, SolidColorBrush> SharedBrushes = new(StringComparer.OrdinalIgnoreCase);
+    private static ControlTemplate? _resultButtonTemplate;
+    private static ControlTemplate? _contextMenuTemplate;
+    private static ControlTemplate? _contextMenuItemTemplate;
+    private static ControlTemplate? _contextMenuSeparatorTemplate;
+    private static ControlTemplate? _roundedButtonTemplate;
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".exe", ".lnk", ".appref-ms"
     };
+    private static readonly PerformanceProfile DeviceProfile = PerformanceProfile.Current;
 
     private readonly List<LauncherItemData> _allItems = [];
     private List<LauncherItemData> _visibleItems = [];
-    private readonly SemaphoreSlim _iconLoader = new(4);
+    private readonly SemaphoreSlim _iconLoader = new(DeviceProfile.IconLoadConcurrency);
     private readonly Dictionary<Guid, Task<BitmapSource?>> _iconLoadTasks = [];
     private readonly DispatcherTimer _toastTimer;
     private readonly DispatcherTimer _edgePageTimer;
+    private readonly DispatcherTimer _searchDebounceTimer;
     private LauncherSettings _settings;
     private LauncherSettings? _settingsSnapshot;
     private int _currentPage;
@@ -39,6 +51,7 @@ public partial class MainWindow : Window
     private System.Windows.Point _backgroundPressPoint;
     private LauncherItemData? _pressedItem;
     private bool _backgroundClickCandidate;
+    private bool _backgroundSwipeTracking;
     private bool _suppressNextClick;
     private bool _isLoaded;
     private bool _isSettingsInitializing;
@@ -53,10 +66,16 @@ public partial class MainWindow : Window
     private int _registeredHotkeyVirtualKey;
     private UpdateInfo? _availableUpdate;
     private MonitorBounds _activeMonitor;
-    private DragPreviewPopup? _dragPreviewPopup;
     private bool _isMinimizedToTaskbar;
     private double _capturedBackgroundBlur = double.NaN;
     private bool _capturedStaticBlackBackground;
+    private int _pageScrollAccumulator;
+    private DateTime _lastPageScrollInputUtc;
+    private bool _isPageAnimating;
+    private int _pageAnimationGeneration;
+    private readonly GCLatencyMode _normalGcLatencyMode = GCSettings.LatencyMode;
+    private bool _performanceGcModeActive;
+    private int _hardwareRenderingTier;
 
     private int ItemsPerPage => _settings.Rows * _settings.Columns;
 
@@ -83,6 +102,16 @@ public partial class MainWindow : Window
             _edgePageTimer.Stop();
             if (_edgePageDirection != 0) ChangePage(_edgePageDirection);
         };
+        _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _searchDebounceTimer.Tick += (_, _) =>
+        {
+            _searchDebounceTimer.Stop();
+            if (!_isLoaded) return;
+            _currentPage = 0;
+            _spotlightSelectedIndex = 0;
+            RefreshFilter();
+            RenderCurrentView(true);
+        };
 
         Loaded += MainWindow_Loaded;
         SourceInitialized += MainWindow_SourceInitialized;
@@ -106,12 +135,14 @@ public partial class MainWindow : Window
         RenderCurrentView();
         AnimateIn();
         FocusActiveSearch();
+        EnterInteractivePerformanceMode();
         LauncherFooterHint.Text = $"Esc 最小化到任务栏  ·  {FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyVirtualKey)} 随时呼出";
         _ = CheckUpdatesOnStartupAsync();
     }
 
     private void MainWindow_SourceInitialized(object? sender, EventArgs e)
     {
+        _hardwareRenderingTier = RenderCapability.Tier >> 16;
         var handle = new WindowInteropHelper(this).Handle;
         _source = HwndSource.FromHwnd(handle);
         _source?.AddHook(WndProc);
@@ -127,6 +158,10 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closed(object? sender, EventArgs e)
     {
+        ExitInteractivePerformanceMode();
+        _toastTimer.Stop();
+        _edgePageTimer.Stop();
+        _searchDebounceTimer.Stop();
         var handle = new WindowInteropHelper(this).Handle;
         UnregisterHotKey(handle, HotkeyId);
         _source?.RemoveHook(WndProc);
@@ -138,6 +173,7 @@ public partial class MainWindow : Window
         {
             _isMinimizedToTaskbar = true;
             Topmost = false;
+            ExitInteractivePerformanceMode();
             return;
         }
 
@@ -150,6 +186,7 @@ public partial class MainWindow : Window
             ApplyWindowSettings(_settings);
             ApplyDisplayMode();
             Topmost = true;
+            EnterInteractivePerformanceMode();
             Activate();
             AnimateIn();
             FocusActiveSearch();
@@ -162,6 +199,15 @@ public partial class MainWindow : Window
         {
             if (IsLauncherOpen) HideLauncher(); else ShowLauncher();
             handled = true;
+        }
+        else if (msg == 0x020E)
+        {
+            var delta = unchecked((short)((wParam.ToInt64() >> 16) & 0xFFFF));
+            if (SettingsLayer.Visibility != Visibility.Visible && !_settings.FloatingSearchMode)
+            {
+                HandlePageScroll(delta);
+                handled = true;
+            }
         }
         else if (msg == 0x02E0 || msg == 0x007E)
         {
@@ -225,10 +271,11 @@ public partial class MainWindow : Window
         foreach (var rawPath in paths)
         {
             string path;
-            try { path = Path.GetFullPath(rawPath); }
+            try { path = NormalizePath(rawPath); }
             catch { invalid++; continue; }
 
-            if (!File.Exists(path) || !SupportedExtensions.Contains(Path.GetExtension(path)))
+            var isDirectory = Directory.Exists(path);
+            if ((!File.Exists(path) || !SupportedExtensions.Contains(Path.GetExtension(path))) && !isDirectory)
             {
                 invalid++;
                 continue;
@@ -260,7 +307,7 @@ public partial class MainWindow : Window
         }
 
         var parts = new List<string>();
-        if (added > 0) parts.Add($"已添加 {added} 个应用");
+        if (added > 0) parts.Add($"已添加 {added} 个项目");
         if (duplicates > 0) parts.Add($"跳过 {duplicates} 个重复项");
         if (invalid > 0) parts.Add($"忽略 {invalid} 个不支持的文件");
         ShowToast(parts.Count > 0 ? string.Join("，", parts) : "没有可添加的应用");
@@ -268,12 +315,17 @@ public partial class MainWindow : Window
 
     private static string NormalizePath(string path)
     {
-        try { return Path.GetFullPath(path); }
+        try { return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); }
         catch { return path; }
     }
 
     private static string GetDefaultName(string path)
     {
+        if (Directory.Exists(path))
+        {
+            var directory = new DirectoryInfo(Path.TrimEndingDirectorySeparator(path));
+            return string.IsNullOrWhiteSpace(directory.Name) ? directory.FullName : directory.Name;
+        }
         var fileName = Path.GetFileName(path);
         return fileName.EndsWith(".appref-ms", StringComparison.OrdinalIgnoreCase)
             ? fileName[..^".appref-ms".Length]
@@ -284,7 +336,6 @@ public partial class MainWindow : Window
     private void Window_DragOver(object sender, System.Windows.DragEventArgs e)
     {
         SetDragEffect(e);
-        if (e.Data.GetDataPresent(InternalDragFormat)) _dragPreviewPopup?.Update(e.GetPosition(PageHost));
     }
 
     private static void SetDragEffect(System.Windows.DragEventArgs e)
@@ -306,6 +357,8 @@ public partial class MainWindow : Window
     {
         var pageCount = Math.Max(1, (int)Math.Ceiling(_visibleItems.Count / (double)ItemsPerPage));
         _currentPage = Math.Clamp(_currentPage, 0, pageCount - 1);
+        PreviousPageButton.Visibility = pageCount > 1 && _currentPage > 0 ? Visibility.Visible : Visibility.Collapsed;
+        NextPageButton.Visibility = pageCount > 1 && _currentPage < pageCount - 1 ? Visibility.Visible : Visibility.Collapsed;
         AppGrid.Children.Clear();
 
         var hasQuery = !string.IsNullOrWhiteSpace(SearchBox.Text);
@@ -350,7 +403,34 @@ public partial class MainWindow : Window
             }
         }
 
+        _ = PreloadAdjacentPageIconsAsync(_currentPage, pageCount);
         if (animate) AnimatePage(direction);
+    }
+
+    private async Task PreloadAdjacentPageIconsAsync(int page, int pageCount)
+    {
+        var adjacentPages = new[] { page - 1, page + 1 }
+            .Where(candidate => candidate >= 0 && candidate < pageCount);
+        var items = adjacentPages
+            .SelectMany(candidate => _visibleItems.Skip(candidate * ItemsPerPage).Take(ItemsPerPage))
+            .Where(item => item.Icon is null)
+            .DistinctBy(item => item.Id)
+            .ToList();
+        await Task.WhenAll(items.Select(async item =>
+        {
+            if (!_iconLoadTasks.TryGetValue(item.Id, out var loadTask))
+            {
+                loadTask = LoadIconWithThrottleAsync(item);
+                _iconLoadTasks[item.Id] = loadTask;
+            }
+            try { item.Icon ??= await loadTask; }
+            catch { }
+            finally
+            {
+                if (_iconLoadTasks.TryGetValue(item.Id, out var currentTask) && ReferenceEquals(currentTask, loadTask))
+                    _iconLoadTasks.Remove(item.Id);
+            }
+        }));
     }
 
     private void RenderCurrentView(bool animate = false, int direction = 1)
@@ -440,7 +520,8 @@ public partial class MainWindow : Window
             Width = iconSize,
             Height = iconSize,
             Stretch = Stretch.Uniform,
-            SnapsToDevicePixels = true
+            SnapsToDevicePixels = true,
+            Clip = CreateIconMask(iconSize)
         };
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
         fallback.Visibility = item.Icon is null ? Visibility.Visible : Visibility.Collapsed;
@@ -525,6 +606,7 @@ public partial class MainWindow : Window
 
     private static ControlTemplate ResultButtonTemplate()
     {
+        if (_resultButtonTemplate is not null) return _resultButtonTemplate;
         var factory = new FrameworkElementFactory(typeof(Border));
         factory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
         factory.SetValue(Border.CornerRadiusProperty, new CornerRadius(18));
@@ -534,11 +616,33 @@ public partial class MainWindow : Window
         presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, System.Windows.HorizontalAlignment.Stretch);
         presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
         factory.AppendChild(presenter);
-        return new ControlTemplate(typeof(Button)) { VisualTree = factory };
+        return _resultButtonTemplate = new ControlTemplate(typeof(Button)) { VisualTree = factory };
     }
 
-    private static SolidColorBrush BrushFrom(string value) =>
-        (SolidColorBrush)new BrushConverter().ConvertFromString(value)!;
+    private static SolidColorBrush BrushFrom(string value)
+    {
+        lock (SharedBrushes)
+        {
+            if (SharedBrushes.TryGetValue(value, out var cached)) return cached;
+            var brush = (SolidColorBrush)new BrushConverter().ConvertFromString(value)!;
+            brush.Freeze();
+            SharedBrushes[value] = brush;
+            return brush;
+        }
+    }
+
+    private static System.Windows.Media.Effects.DropShadowEffect CreateLauncherLabelShadow()
+    {
+        var effect = new System.Windows.Media.Effects.DropShadowEffect
+        {
+            BlurRadius = 4,
+            ShadowDepth = 1,
+            Opacity = .8,
+            Color = Colors.Black
+        };
+        effect.Freeze();
+        return effect;
+    }
 
     private Button CreateLauncherButton(LauncherItemData item)
     {
@@ -548,8 +652,7 @@ public partial class MainWindow : Window
             Width = _settings.IconSize,
             Height = _settings.IconSize,
             CornerRadius = new CornerRadius(5),
-            Background = (System.Windows.Media.Brush)new BrushConverter().ConvertFromString(
-                palette[(item.Name.GetHashCode() & int.MaxValue) % palette.Length])!,
+            Background = BrushFrom(palette[(item.Name.GetHashCode() & int.MaxValue) % palette.Length]),
             Child = new TextBlock
             {
                 Text = GetInitial(item.Name),
@@ -568,7 +671,8 @@ public partial class MainWindow : Window
             Width = _settings.IconSize,
             Height = _settings.IconSize,
             Stretch = Stretch.Uniform,
-            SnapsToDevicePixels = true
+            SnapsToDevicePixels = true,
+            Clip = CreateIconMask(_settings.IconSize)
         };
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
         fallback.Visibility = item.Icon is null ? Visibility.Visible : Visibility.Collapsed;
@@ -582,13 +686,13 @@ public partial class MainWindow : Window
         {
             Text = item.Name,
             Foreground = System.Windows.Media.Brushes.White,
-            FontFamily = new System.Windows.Media.FontFamily("Segoe UI Variable Text,Segoe UI"),
+            FontFamily = LauncherFont,
             FontSize = 14,
             TextAlignment = TextAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = Math.Max(110, _settings.IconSize + 54),
             Margin = new Thickness(0, 8, 0, 0),
-            Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 4, ShadowDepth = 1, Opacity = .8, Color = Colors.Black }
+            Effect = LauncherLabelShadow
         };
 
         var panel = new StackPanel { HorizontalAlignment = System.Windows.HorizontalAlignment.Center };
@@ -617,6 +721,15 @@ public partial class MainWindow : Window
     {
         var trimmed = name.Trim();
         return trimmed.Length == 0 ? "?" : trimmed[..1].ToUpperInvariant();
+    }
+
+    private Geometry? CreateIconMask(double size)
+    {
+        if (!_settings.UseIconMask) return null;
+        var radius = Math.Max(8, size * .22);
+        var geometry = new RectangleGeometry(new Rect(0, 0, size, size), radius, radius);
+        geometry.Freeze();
+        return geometry;
     }
 
     private async Task LoadIconAsync(LauncherItemData item, System.Windows.Controls.Image image, Border fallback)
@@ -665,21 +778,105 @@ public partial class MainWindow : Window
 
     private ContextMenu CreateItemContextMenu(LauncherItemData item)
     {
-        var menu = new ContextMenu();
-        var rename = new MenuItem { Header = "重命名" };
+        var menu = new ContextMenu
+        {
+            Background = System.Windows.Media.Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Foreground = System.Windows.Media.Brushes.White,
+            Padding = new Thickness(0),
+            HasDropShadow = false,
+            Template = CreateContextMenuTemplate()
+        };
+        var rename = CreateContextMenuItem("重命名");
         rename.Click += (_, _) => RenameItem(item);
-        var changeIcon = new MenuItem { Header = "更换图标…" };
+        var changeIcon = CreateContextMenuItem("更换图标…");
         changeIcon.Click += (_, _) => ChangeItemIcon(item);
-        var resetIcon = new MenuItem { Header = "恢复默认图标", IsEnabled = !string.IsNullOrWhiteSpace(item.CustomIconPath) };
+        var resetIcon = CreateContextMenuItem("恢复默认图标");
+        resetIcon.IsEnabled = !string.IsNullOrWhiteSpace(item.CustomIconPath);
         resetIcon.Click += (_, _) => ResetItemIcon(item);
-        var remove = new MenuItem { Header = "删除" };
+        var remove = CreateContextMenuItem("删除");
+        remove.Foreground = BrushFrom("#FFFF858F");
         remove.Click += (_, _) => RemoveItem(item);
         menu.Items.Add(rename);
         menu.Items.Add(changeIcon);
         menu.Items.Add(resetIcon);
-        menu.Items.Add(new Separator());
+        menu.Items.Add(CreateContextMenuSeparator());
         menu.Items.Add(remove);
         return menu;
+    }
+
+    private static MenuItem CreateContextMenuItem(string header) => new()
+    {
+        Header = header,
+        Height = 38,
+        Padding = new Thickness(13, 0, 18, 0),
+        Foreground = System.Windows.Media.Brushes.White,
+        Background = System.Windows.Media.Brushes.Transparent,
+        FontFamily = MenuFont,
+        FontSize = 13,
+        Cursor = Cursors.Hand,
+        FocusVisualStyle = null,
+        Template = CreateContextMenuItemTemplate()
+    };
+
+    private static ControlTemplate CreateContextMenuTemplate()
+    {
+        if (_contextMenuTemplate is not null) return _contextMenuTemplate;
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetValue(Border.BackgroundProperty, BrushFrom("#FA1B202A"));
+        border.SetValue(Border.BorderBrushProperty, BrushFrom("#36FFFFFF"));
+        border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(14));
+        border.SetValue(Border.PaddingProperty, new Thickness(6));
+        var shadow = new System.Windows.Media.Effects.DropShadowEffect
+        {
+            Color = Colors.Black, BlurRadius = 24, ShadowDepth = 8, Opacity = .5
+        };
+        shadow.Freeze();
+        border.SetValue(Border.EffectProperty, shadow);
+        var presenter = new FrameworkElementFactory(typeof(ItemsPresenter));
+        border.AppendChild(presenter);
+        return _contextMenuTemplate = new ControlTemplate(typeof(ContextMenu)) { VisualTree = border };
+    }
+
+    private static ControlTemplate CreateContextMenuItemTemplate()
+    {
+        if (_contextMenuItemTemplate is not null) return _contextMenuItemTemplate;
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.Name = "ItemSurface";
+        border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(9));
+        border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+        var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        presenter.SetValue(ContentPresenter.ContentSourceProperty, "Header");
+        presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        border.AppendChild(presenter);
+        var template = new ControlTemplate(typeof(MenuItem)) { VisualTree = border };
+        var hover = new Trigger { Property = MenuItem.IsHighlightedProperty, Value = true };
+        hover.Setters.Add(new Setter(Border.BackgroundProperty, BrushFrom("#24FFFFFF"), "ItemSurface"));
+        template.Triggers.Add(hover);
+        var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(UIElement.OpacityProperty, .34, "ItemSurface"));
+        template.Triggers.Add(disabled);
+        return _contextMenuItemTemplate = template;
+    }
+
+    private static Separator CreateContextMenuSeparator()
+    {
+        if (_contextMenuSeparatorTemplate is null)
+        {
+            var line = new FrameworkElementFactory(typeof(Border));
+            line.SetValue(Border.HeightProperty, 1d);
+            line.SetValue(Border.BackgroundProperty, BrushFrom("#26FFFFFF"));
+            line.SetValue(Border.MarginProperty, new Thickness(9, 5, 9, 5));
+            _contextMenuSeparatorTemplate = new ControlTemplate(typeof(Separator)) { VisualTree = line };
+        }
+        return new Separator
+        {
+            Height = 11,
+            Background = System.Windows.Media.Brushes.Transparent,
+            Template = _contextMenuSeparatorTemplate
+        };
     }
 
     private void RenameItem(LauncherItemData item)
@@ -727,8 +924,7 @@ public partial class MainWindow : Window
 
     private void RemoveItem(LauncherItemData item)
     {
-        if (System.Windows.MessageBox.Show(this, $"从应用中心中删除“{item.Name}”？\n原始程序不会被删除。", "删除应用",
-                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        if (new RemoveAppDialog(this, item.Name).ShowDialog() != true) return;
         AppDataStore.DeleteCustomIcon(item);
         IconCacheService.Invalidate(item.Id);
         _allItems.Remove(item);
@@ -754,18 +950,11 @@ public partial class MainWindow : Window
         _suppressNextClick = true;
         var data = new System.Windows.DataObject(InternalDragFormat, _pressedItem.Id.ToString("D"));
         var draggedButton = sender as Button;
-        if (draggedButton is not null)
-        {
-            _dragPreviewPopup = new DragPreviewPopup(PageHost, draggedButton);
-            _dragPreviewPopup.Show(e.GetPosition(PageHost));
-            draggedButton.Opacity = .28;
-        }
+        if (draggedButton is not null) draggedButton.Opacity = .22;
         try { System.Windows.DragDrop.DoDragDrop((DependencyObject)sender, data, System.Windows.DragDropEffects.Move); }
         finally
         {
             draggedButton?.SetCurrentValue(OpacityProperty, 1d);
-            _dragPreviewPopup?.Dispose();
-            _dragPreviewPopup = null;
             DropIndicator.Visibility = Visibility.Collapsed;
             _edgePageTimer.Stop();
             _edgePageDirection = 0;
@@ -805,7 +994,6 @@ public partial class MainWindow : Window
 
     private void UpdateDragVisuals(System.Windows.DragEventArgs e)
     {
-        _dragPreviewPopup?.Update(e.GetPosition(PageHost));
         var position = e.GetPosition(AppGrid);
         UpdateDropIndicator(position);
         var direction = position.X < 48 ? -1 : position.X > AppGrid.ActualWidth - 48 ? 1 : 0;
@@ -881,7 +1069,8 @@ public partial class MainWindow : Window
 
     private void LaunchItem(LauncherItemData item)
     {
-        if (item.TargetKind == LauncherTargetKind.File && !File.Exists(item.TargetPath))
+        if (item.TargetKind == LauncherTargetKind.File &&
+            !File.Exists(item.TargetPath) && !Directory.Exists(item.TargetPath))
         {
             ShowToast($"找不到“{item.Name}”的目标文件");
             return;
@@ -906,10 +1095,11 @@ public partial class MainWindow : Window
 
     private static ControlTemplate RoundedButtonTemplate()
     {
+        if (_roundedButtonTemplate is not null) return _roundedButtonTemplate;
         var factory = new FrameworkElementFactory(typeof(Border));
         factory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
         factory.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
-        return new ControlTemplate(typeof(Button)) { VisualTree = factory };
+        return _roundedButtonTemplate = new ControlTemplate(typeof(Button)) { VisualTree = factory };
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -938,10 +1128,8 @@ public partial class MainWindow : Window
         SearchHint.Visibility = string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
         ClearSearchButton.Visibility = string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
         SpotlightSearchHint.Visibility = string.IsNullOrEmpty(SpotlightSearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
-        _currentPage = 0;
-        _spotlightSelectedIndex = 0;
-        RefreshFilter();
-        RenderCurrentView(true);
+        _searchDebounceTimer.Stop();
+        _searchDebounceTimer.Start();
     }
 
     private void RefreshFilter()
@@ -1112,8 +1300,10 @@ public partial class MainWindow : Window
         ColumnsSlider.Value = _settings.Columns;
         RowsSlider.Value = _settings.Rows;
         IconSizeSlider.Value = _settings.IconSize;
+        IconMaskCheck.IsChecked = _settings.UseIconMask;
         PinyinSearchCheck.IsChecked = _settings.EnablePinyinSearch;
         StaticBlackBackgroundCheck.IsChecked = _settings.StaticBlackBackground;
+        SoftwareRenderingCheck.IsChecked = _settings.SoftwareRenderingCompatibility;
         BackgroundBlurSlider.Value = _settings.BackgroundBlur;
         _pendingHotkeyModifiers = _settings.HotkeyModifiers;
         _pendingHotkeyVirtualKey = _settings.HotkeyVirtualKey;
@@ -1174,8 +1364,10 @@ public partial class MainWindow : Window
             Columns = (int)Math.Round(ColumnsSlider.Value),
             Rows = (int)Math.Round(RowsSlider.Value),
             IconSize = Math.Round(IconSizeSlider.Value),
+            UseIconMask = IconMaskCheck.IsChecked == true,
             EnablePinyinSearch = PinyinSearchCheck.IsChecked == true,
             StaticBlackBackground = StaticBlackBackgroundCheck.IsChecked == true,
+            SoftwareRenderingCompatibility = SoftwareRenderingCheck.IsChecked == true,
             BackgroundBlur = Math.Round(BackgroundBlurSlider.Value),
             HotkeyModifiers = _pendingHotkeyModifiers,
             HotkeyVirtualKey = _pendingHotkeyVirtualKey,
@@ -1191,6 +1383,8 @@ public partial class MainWindow : Window
     private void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
         var next = ReadSettingsControls();
+        var renderingModeChanged = _settingsSnapshot is not null &&
+                                   _settingsSnapshot.SoftwareRenderingCompatibility != next.SoftwareRenderingCompatibility;
         if (!TryApplyHotkey(next.HotkeyModifiers, next.HotkeyVirtualKey))
         {
             ShowToast($"无法注册 {FormatHotkey(next.HotkeyModifiers, next.HotkeyVirtualKey)}，请更换组合键");
@@ -1198,7 +1392,11 @@ public partial class MainWindow : Window
         }
         _settings = next;
         LauncherFooterHint.Text = $"Esc 返回桌面  ·  {FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyVirtualKey)} 随时呼出";
-        try { AppDataStore.SaveSettings(_settings); ShowToast("设置已保存"); }
+        try
+        {
+            AppDataStore.SaveSettings(_settings);
+            ShowToast(renderingModeChanged ? "设置已保存，渲染模式将在重启后生效" : "设置已保存");
+        }
         catch (Exception ex) { ShowToast($"无法保存设置：{ex.Message}"); }
         _settingsSnapshot = null;
         CloseSettingsDrawer();
@@ -1274,8 +1472,24 @@ public partial class MainWindow : Window
         {
             var handle = new WindowInteropHelper(this).Handle;
             if (handle == IntPtr.Zero) return;
-            var preference = rounded ? 2 : 1;
+            // The window region supplies the larger radius. Disable DWM's own rounding
+            // and border so it does not leave a second outline around the clipped corners.
+            var preference = 1;
             DwmSetWindowAttribute(handle, 33, ref preference, sizeof(int));
+            var borderColor = unchecked((int)0xFFFFFFFE); // DWMWA_COLOR_NONE
+            DwmSetWindowAttribute(handle, 34, ref borderColor, sizeof(int));
+            if (!rounded)
+            {
+                SetWindowRgn(handle, IntPtr.Zero, true);
+                return;
+            }
+
+            if (!GetClientRect(handle, out var bounds)) return;
+            var dpiScale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            var diameter = Math.Max(2, (int)Math.Round(40 * dpiScale * 2));
+            var region = CreateRoundRectRgn(0, 0, bounds.Right + 1, bounds.Bottom + 1, diameter, diameter);
+            if (region == IntPtr.Zero) return;
+            if (SetWindowRgn(handle, region, true) == 0) DeleteObject(region);
         }
         catch { }
     }
@@ -1287,6 +1501,11 @@ public partial class MainWindow : Window
         SpotlightShell.Visibility = floating ? Visibility.Visible : Visibility.Collapsed;
         LauncherFooterHint.Visibility = floating ? Visibility.Collapsed : Visibility.Visible;
         BrandFooter.Visibility = floating ? Visibility.Collapsed : Visibility.Visible;
+        if (floating)
+        {
+            PreviousPageButton.Visibility = Visibility.Collapsed;
+            NextPageButton.Visibility = Visibility.Collapsed;
+        }
 
         if (floating)
         {
@@ -1434,8 +1653,8 @@ public partial class MainWindow : Window
             return;
         }
         if (SettingsLayer.Visibility == Visibility.Visible) return;
-        if (e.Key == Key.Left) { ChangePage(-1); e.Handled = true; }
-        if (e.Key == Key.Right) { ChangePage(1); e.Handled = true; }
+        if (e.Key is Key.Left or Key.PageUp) { ChangePage(-1); e.Handled = true; }
+        if (e.Key is Key.Right or Key.PageDown) { ChangePage(1); e.Handled = true; }
     }
 
     private void Window_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1443,21 +1662,42 @@ public partial class MainWindow : Window
         _backgroundClickCandidate = SettingsLayer.Visibility != Visibility.Visible &&
                                     e.OriginalSource is DependencyObject source &&
                                     IsBackgroundClickTarget(source);
-        if (_backgroundClickCandidate) _backgroundPressPoint = e.GetPosition(this);
+        _backgroundSwipeTracking = _backgroundClickCandidate && !_settings.FloatingSearchMode;
+        if (_backgroundClickCandidate)
+        {
+            _backgroundPressPoint = e.GetPosition(this);
+            if (_backgroundSwipeTracking) CaptureMouse();
+        }
     }
 
     private void Window_PreviewMouseMove(object sender, MouseEventArgs e)
     {
-        if (!_backgroundClickCandidate || e.LeftButton != MouseButtonState.Pressed) return;
+        if (!_backgroundSwipeTracking || e.LeftButton != MouseButtonState.Pressed) return;
 
         var position = e.GetPosition(this);
-        if (Math.Abs(position.X - _backgroundPressPoint.X) >= SystemParameters.MinimumHorizontalDragDistance ||
-            Math.Abs(position.Y - _backgroundPressPoint.Y) >= SystemParameters.MinimumVerticalDragDistance)
+        var deltaX = position.X - _backgroundPressPoint.X;
+        var deltaY = position.Y - _backgroundPressPoint.Y;
+        var horizontalDistance = Math.Abs(deltaX);
+        var verticalDistance = Math.Abs(deltaY);
+        if (horizontalDistance >= 72 && horizontalDistance > verticalDistance * 1.15)
+        {
+            _backgroundClickCandidate = false;
+            _backgroundSwipeTracking = false;
+            ReleaseMouseCapture();
+            ChangePage(deltaX < 0 ? 1 : -1);
+            e.Handled = true;
+            return;
+        }
+
+        if (horizontalDistance >= SystemParameters.MinimumHorizontalDragDistance ||
+            verticalDistance >= SystemParameters.MinimumVerticalDragDistance)
             _backgroundClickCandidate = false;
     }
 
     private void Window_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        _backgroundSwipeTracking = false;
+        if (IsMouseCaptured) ReleaseMouseCapture();
         if (!_backgroundClickCandidate) return;
         _backgroundClickCandidate = false;
 
@@ -1505,17 +1745,44 @@ public partial class MainWindow : Window
 
     private void Window_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (SettingsLayer.Visibility != Visibility.Visible && !_settings.FloatingSearchMode) ChangePage(e.Delta < 0 ? 1 : -1);
+        HandlePageScroll(-e.Delta);
+        if (SettingsLayer.Visibility != Visibility.Visible && !_settings.FloatingSearchMode) e.Handled = true;
+    }
+
+    private void HandlePageScroll(int navigationDelta)
+    {
+        if (navigationDelta == 0 || SettingsLayer.Visibility == Visibility.Visible || _settings.FloatingSearchMode) return;
+        var now = DateTime.UtcNow;
+        if ((now - _lastPageScrollInputUtc).TotalMilliseconds > 320 ||
+            (_pageScrollAccumulator != 0 && Math.Sign(_pageScrollAccumulator) != Math.Sign(navigationDelta)))
+            _pageScrollAccumulator = 0;
+        _lastPageScrollInputUtc = now;
+        _pageScrollAccumulator += navigationDelta;
+        if (Math.Abs(_pageScrollAccumulator) < 80) return;
+        var direction = Math.Sign(_pageScrollAccumulator);
+        _pageScrollAccumulator = 0;
+        ChangePage(direction);
     }
 
     private void ChangePage(int delta)
     {
-        var pageCount = Math.Max(1, (int)Math.Ceiling(_visibleItems.Count / (double)ItemsPerPage));
-        var next = Math.Clamp(_currentPage + delta, 0, pageCount - 1);
-        if (next == _currentPage) return;
-        _currentPage = next;
-        RenderPage(true, delta);
+        GoToPage(_currentPage + delta);
     }
+
+    private void GoToPage(int page)
+    {
+        if (_isPageAnimating) return;
+        var pageCount = Math.Max(1, (int)Math.Ceiling(_visibleItems.Count / (double)ItemsPerPage));
+        var next = Math.Clamp(page, 0, pageCount - 1);
+        if (next == _currentPage) return;
+        var direction = next > _currentPage ? 1 : -1;
+        _currentPage = next;
+        RenderPage(true, direction);
+    }
+
+    private void PreviousPageButton_Click(object sender, RoutedEventArgs e) => ChangePage(-1);
+
+    private void NextPageButton_Click(object sender, RoutedEventArgs e) => ChangePage(1);
 
     private void ShowLauncher()
     {
@@ -1528,6 +1795,7 @@ public partial class MainWindow : Window
         WindowState = WindowState.Normal;
         Activate();
         Topmost = true;
+        EnterInteractivePerformanceMode();
         AnimateIn();
         FocusActiveSearch();
     }
@@ -1567,6 +1835,7 @@ public partial class MainWindow : Window
             _isMinimizedToTaskbar = true;
             WindowState = WindowState.Minimized;
             Root.Opacity = 1;
+            ExitInteractivePerformanceMode();
         };
         Root.BeginAnimation(OpacityProperty, fade);
     }
@@ -1578,11 +1847,51 @@ public partial class MainWindow : Window
 
     private void AnimatePage(int direction)
     {
+        var generation = ++_pageAnimationGeneration;
+        _isPageAnimating = true;
+        AppGrid.BeginAnimation(OpacityProperty, null);
+        AppGrid.Opacity = 1;
+        AppGrid.CacheMode = new BitmapCache(1);
+        RenderOptions.SetBitmapScalingMode(AppGrid, BitmapScalingMode.LowQuality);
         var transform = new TranslateTransform();
         AppGrid.RenderTransform = transform;
-        AppGrid.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(190)));
-        transform.BeginAnimation(TranslateTransform.XProperty,
-            new DoubleAnimation(direction * 70, 0, TimeSpan.FromMilliseconds(220)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        var useHardwareProfile = _hardwareRenderingTier >= 2 && !_settings.SoftwareRenderingCompatibility;
+        var distance = useHardwareProfile ? DeviceProfile.PageSlideDistance : 34;
+        var duration = useHardwareProfile ? DeviceProfile.PageAnimationDurationMs : 155;
+        var animation = new DoubleAnimation(direction * distance, 0, TimeSpan.FromMilliseconds(duration))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        animation.Completed += (_, _) =>
+        {
+            if (generation != _pageAnimationGeneration) return;
+            transform.BeginAnimation(TranslateTransform.XProperty, null);
+            AppGrid.RenderTransform = Transform.Identity;
+            AppGrid.CacheMode = null;
+            RenderOptions.SetBitmapScalingMode(AppGrid, BitmapScalingMode.HighQuality);
+            _isPageAnimating = false;
+        };
+        transform.BeginAnimation(TranslateTransform.XProperty, animation);
+    }
+
+    private void EnterInteractivePerformanceMode()
+    {
+        if (_performanceGcModeActive || !DeviceProfile.UseLowLatencyGc || _hardwareRenderingTier < 2 ||
+            _settings.SoftwareRenderingCompatibility) return;
+        try
+        {
+            GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+            _performanceGcModeActive = GCSettings.LatencyMode == GCLatencyMode.SustainedLowLatency;
+        }
+        catch { }
+    }
+
+    private void ExitInteractivePerformanceMode()
+    {
+        if (!_performanceGcModeActive) return;
+        try { GCSettings.LatencyMode = _normalGcLatencyMode; }
+        catch { }
+        _performanceGcModeActive = false;
     }
 
     private void PersistItems()
@@ -1693,4 +2002,7 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hwnd, int id);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+    [DllImport("user32.dll")] private static extern int SetWindowRgn(IntPtr window, IntPtr region, bool redraw);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr window, out NativeRect rectangle);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
 }

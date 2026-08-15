@@ -9,7 +9,18 @@ public sealed class PersistenceTests : IDisposable
     [Fact]
     public void NewSettingsUseBalancedDefaultIconSize()
     {
-        Assert.Equal(64, new centre_app.LauncherSettings().IconSize);
+        var settings = new centre_app.LauncherSettings();
+        Assert.Equal(64, settings.IconSize);
+        Assert.False(settings.UseIconMask);
+        Assert.False(settings.SoftwareRenderingCompatibility);
+    }
+
+    [Fact]
+    public void LegacySettingsWithoutRenderingModeDefaultToHardwareAcceleration()
+    {
+        var settings = JsonSerializer.Deserialize<centre_app.LauncherSettings>("{\"Columns\":8}")!;
+
+        Assert.False(settings.SoftwareRenderingCompatibility);
     }
 
     [Fact]
@@ -82,7 +93,9 @@ public sealed class PersistenceTests : IDisposable
             AppAreaWidth = 5000,
             AppAreaHeight = 100,
             EnablePinyinSearch = true,
-            StaticBlackBackground = true
+            StaticBlackBackground = true,
+            UseIconMask = true,
+            SoftwareRenderingCompatibility = true
         };
 
         settings.Normalize(1440, 900);
@@ -92,6 +105,8 @@ public sealed class PersistenceTests : IDisposable
         Assert.Equal(420, clone.AppAreaHeight);
         Assert.True(clone.EnablePinyinSearch);
         Assert.True(clone.StaticBlackBackground);
+        Assert.True(clone.UseIconMask);
+        Assert.True(clone.SoftwareRenderingCompatibility);
     }
 
     public void Dispose()

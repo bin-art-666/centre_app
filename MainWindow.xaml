@@ -163,6 +163,21 @@
             <StackPanel Grid.Row="2" x:Name="PageIndicators" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Grid>
 
+        <Button x:Name="PreviousPageButton" Style="{StaticResource CircleActionButton}" Width="42" Height="42" Margin="14,0,0,0"
+                HorizontalAlignment="Left" VerticalAlignment="Center" Padding="0"
+                ToolTip="上一页" AutomationProperties.Name="上一页" Visibility="Collapsed" AllowDrop="True"
+                Click="PreviousPageButton_Click" DragOver="AppGrid_DragOver" Drop="AppGrid_Drop">
+            <Path Width="9" Height="16" Data="M 8,1 L 1,8 L 8,15" Stretch="Fill" Stroke="White" StrokeThickness="2.4"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" IsHitTestVisible="False"/>
+        </Button>
+        <Button x:Name="NextPageButton" Style="{StaticResource CircleActionButton}" Width="42" Height="42" Margin="0,0,14,0"
+                HorizontalAlignment="Right" VerticalAlignment="Center" Padding="0"
+                ToolTip="下一页" AutomationProperties.Name="下一页" Visibility="Collapsed" AllowDrop="True"
+                Click="NextPageButton_Click" DragOver="AppGrid_DragOver" Drop="AppGrid_Drop">
+            <Path Width="9" Height="16" Data="M 1,1 L 8,8 L 1,15" Stretch="Fill" Stroke="White" StrokeThickness="2.4"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" IsHitTestVisible="False"/>
+        </Button>
+
         <Grid x:Name="SpotlightShell" Visibility="Collapsed">
             <Border x:Name="SpotlightCard" Width="860" Height="190" HorizontalAlignment="Center" VerticalAlignment="Center"
                     CornerRadius="40" BorderThickness="1" ClipToBounds="True"
@@ -383,6 +398,14 @@
                             <Border Style="{StaticResource SettingsCard}" Margin="0,8,0,12">
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="图标圆角遮罩" Foreground="White" FontSize="15"/><TextBlock Text="将应用图标裁剪为统一的圆角方形，默认关闭" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
+                                    <CheckBox x:Name="IconMaskCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
+                                </Grid>
+                            </Border>
+
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel><TextBlock Text="拼音检索" Foreground="White" FontSize="15"/><TextBlock Text="支持用 weixin、wx 搜索“微信”；关闭后卸载拼音词库" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
                                     <CheckBox x:Name="PinyinSearchCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
                                 </Grid>
@@ -393,6 +416,13 @@
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel><TextBlock Text="纯黑静态背景" Foreground="White" FontSize="15"/><TextBlock Text="不截取桌面，进一步降低内存和唤出开销" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
                                     <CheckBox x:Name="StaticBlackBackgroundCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="软件渲染兼容模式" Foreground="White" FontSize="15"/><TextBlock Text="仅在显卡兼容异常时启用，保存后重启生效" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
+                                    <CheckBox x:Name="SoftwareRenderingCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
                                 </Grid>
                             </Border>
                             <StackPanel x:Name="BackgroundBlurPanel">
