@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.1.0"
+  #define MyAppVersion "1.2.0"
 #endif
 
 [Setup]
@@ -45,8 +45,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "..\artifacts\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\应用中心"; Filename: "{app}\应用中心.exe"
-Name: "{autodesktop}\应用中心"; Filename: "{app}\应用中心.exe"; Tasks: desktopicon
+Name: "{group}\应用中心"; Filename: "{app}\应用中心.exe"; AppUserModelID: "bin-art-666.ApplicationCenter"
+Name: "{autodesktop}\应用中心"; Filename: "{app}\应用中心.exe"; Tasks: desktopicon; AppUserModelID: "bin-art-666.ApplicationCenter"
 
 [Run]
 Filename: "{app}\应用中心.exe"; Description: "启动应用中心"; Flags: nowait postinstall skipifsilent

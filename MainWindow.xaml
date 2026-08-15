@@ -2,8 +2,9 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="应用中心" Icon="Assets/Centre.ico"
-        WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
+        WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="True" Topmost="True"
         Background="#111318" AllowsTransparency="False" AllowDrop="True"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
         PreviewKeyDown="Window_PreviewKeyDown"
         PreviewMouseLeftButtonDown="Window_PreviewMouseLeftButtonDown"
         PreviewMouseMove="Window_PreviewMouseMove"
@@ -27,11 +28,9 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="ButtonRoot" Property="Background" Value="#28FFFFFF"/>
-                                <Setter TargetName="ButtonRoot" Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1.055" ScaleY="1.055"/></Setter.Value></Setter>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="ButtonRoot" Property="Opacity" Value=".72"/>
-                                <Setter TargetName="ButtonRoot" Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX=".95" ScaleY=".95"/></Setter.Value></Setter>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -66,13 +65,61 @@
         </Style>
 
         <Style x:Key="SettingsSlider" TargetType="Slider">
-            <Setter Property="Margin" Value="0,7,0,13"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Margin" Value="0,5,0,13"/>
             <Setter Property="IsSnapToTickEnabled" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Track x:Name="PART_Track" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                               Value="{TemplateBinding Value}" Orientation="Horizontal" IsDirectionReversed="False">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Command="{x:Static Slider.DecreaseLarge}" IsTabStop="False">
+                                    <RepeatButton.Template>
+                                        <ControlTemplate TargetType="RepeatButton"><Grid><Border Height="5" CornerRadius="3" Background="#4F8CFF" VerticalAlignment="Center"/></Grid></ControlTemplate>
+                                    </RepeatButton.Template>
+                                </RepeatButton>
+                            </Track.DecreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb Width="18" Height="18">
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Ellipse x:Name="ThumbCircle" Fill="#F7FAFF" Stroke="#4F8CFF" StrokeThickness="3"/>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsDragging" Value="True"><Setter TargetName="ThumbCircle" Property="Fill" Value="#DCE9FF"/></Trigger>
+                                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ThumbCircle" Property="Stroke" Value="#77A7FF"/></Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Command="{x:Static Slider.IncreaseLarge}" IsTabStop="False">
+                                    <RepeatButton.Template>
+                                        <ControlTemplate TargetType="RepeatButton"><Grid><Border Height="5" CornerRadius="3" Background="#25FFFFFF" VerticalAlignment="Center"/></Grid></ControlTemplate>
+                                    </RepeatButton.Template>
+                                </RepeatButton>
+                            </Track.IncreaseRepeatButton>
+                        </Track>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="PART_Track" Property="Opacity" Value=".35"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SettingsCard" TargetType="Border">
+            <Setter Property="Background" Value="#12FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#20FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="16"/>
+            <Setter Property="Padding" Value="16,14"/>
         </Style>
     </Window.Resources>
 
-    <Grid x:Name="Root" Opacity="0" RenderTransformOrigin=".5,.5">
-        <Grid.RenderTransform><ScaleTransform x:Name="RootScale" ScaleX="1.08" ScaleY="1.08"/></Grid.RenderTransform>
+    <Grid x:Name="Root" Opacity="0" Background="Black" RenderTransformOrigin=".5,.5">
+        <Grid.RenderTransform><ScaleTransform x:Name="RootScale" ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
         <Image x:Name="DesktopBackground" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="Fant"/>
         <Rectangle x:Name="PrimaryDimmer" Fill="#72080B12"/>
         <Rectangle x:Name="EdgeDimmer">
@@ -186,9 +233,101 @@
         </Border>
 
         <Grid x:Name="SettingsLayer" Visibility="Collapsed">
+            <Grid.Resources>
+                <Style TargetType="Button">
+                    <Setter Property="Foreground" Value="#F4FFFFFF"/>
+                    <Setter Property="Background" Value="#16FFFFFF"/>
+                    <Setter Property="BorderBrush" Value="#28FFFFFF"/>
+                    <Setter Property="BorderThickness" Value="1"/>
+                    <Setter Property="Padding" Value="14,7"/>
+                    <Setter Property="Cursor" Value="Hand"/>
+                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="ButtonSurface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonSurface" Property="Background" Value="#26FFFFFF"/><Setter TargetName="ButtonSurface" Property="BorderBrush" Value="#40FFFFFF"/></Trigger>
+                                    <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonSurface" Property="Opacity" Value=".72"/></Trigger>
+                                    <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ButtonSurface" Property="Opacity" Value=".4"/></Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+                <Style x:Key="PrimarySettingsButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                    <Setter Property="Background" Value="#4F8CFF"/>
+                    <Setter Property="BorderBrush" Value="#6DA0FF"/>
+                    <Setter Property="FontWeight" Value="SemiBold"/>
+                </Style>
+                <Style TargetType="TextBox">
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="CaretBrush" Value="White"/>
+                    <Setter Property="Background" Value="#12FFFFFF"/>
+                    <Setter Property="BorderBrush" Value="#2CFFFFFF"/>
+                    <Setter Property="BorderThickness" Value="1"/>
+                    <Setter Property="Padding" Value="12,7"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="TextBox">
+                                <Border x:Name="TextSurface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10">
+                                    <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="TextSurface" Property="BorderBrush" Value="#698FFF"/></Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+                <Style TargetType="CheckBox">
+                    <Setter Property="Width" Value="44"/>
+                    <Setter Property="Height" Value="24"/>
+                    <Setter Property="Cursor" Value="Hand"/>
+                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="CheckBox">
+                                <Grid>
+                                    <Border x:Name="ToggleTrack" CornerRadius="12" Background="#2AFFFFFF" BorderBrush="#34FFFFFF" BorderThickness="1"/>
+                                    <Ellipse x:Name="ToggleThumb" Width="18" Height="18" Margin="3" HorizontalAlignment="Left" Fill="#DCE2EC"/>
+                                </Grid>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsChecked" Value="True"><Setter TargetName="ToggleTrack" Property="Background" Value="#4F8CFF"/><Setter TargetName="ToggleTrack" Property="BorderBrush" Value="#6DA0FF"/><Setter TargetName="ToggleThumb" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="ToggleThumb" Property="Fill" Value="White"/></Trigger>
+                                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ToggleTrack" Property="Opacity" Value=".86"/></Trigger>
+                                    <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value=".4"/></Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+                <Style x:Key="SettingsScrollThumb" TargetType="Thumb">
+                    <Setter Property="Width" Value="6"/>
+                    <Setter Property="Margin" Value="1"/>
+                    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Thumb"><Border Background="#48FFFFFF" CornerRadius="3"/></ControlTemplate></Setter.Value></Setter>
+                </Style>
+                <Style TargetType="ScrollBar">
+                    <Setter Property="Width" Value="8"/>
+                    <Setter Property="Background" Value="Transparent"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Track x:Name="PART_Track" IsDirectionReversed="True" Orientation="Vertical">
+                                    <Track.DecreaseRepeatButton><RepeatButton Command="{x:Static ScrollBar.PageUpCommand}" Opacity="0" IsTabStop="False"/></Track.DecreaseRepeatButton>
+                                    <Track.Thumb><Thumb Style="{StaticResource SettingsScrollThumb}"/></Track.Thumb>
+                                    <Track.IncreaseRepeatButton><RepeatButton Command="{x:Static ScrollBar.PageDownCommand}" Opacity="0" IsTabStop="False"/></Track.IncreaseRepeatButton>
+                                </Track>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </Grid.Resources>
             <Button Background="#52000000" BorderThickness="0" Click="SettingsScrim_Click" Cursor="Arrow"/>
             <Border x:Name="SettingsDrawer" Width="410" HorizontalAlignment="Right" Margin="0,14,14,14"
-                    Background="#F2252933" BorderBrush="#42FFFFFF" BorderThickness="1" CornerRadius="24"
+                    Background="#FA181C25" BorderBrush="#26FFFFFF" BorderThickness="1" CornerRadius="24"
                     RenderTransformOrigin="1,.5">
                 <Border.RenderTransform><TranslateTransform x:Name="SettingsTranslate" X="430"/></Border.RenderTransform>
                 <Grid Margin="27,24">
@@ -198,22 +337,22 @@
                             <Image Source="Assets/startIcon.png" Width="34" Height="34" Margin="0,0,12,0"/>
                             <StackPanel><TextBlock Text="应用中心设置" Foreground="White" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="外观与窗口" Foreground="#98FFFFFF" FontSize="12"/></StackPanel>
                         </StackPanel>
-                        <Button Content="×" HorizontalAlignment="Right" VerticalAlignment="Top" Width="32" Height="32" FontSize="20" Foreground="White" Background="Transparent" BorderThickness="0" Cursor="Hand" Click="CancelSettings_Click"/>
+                        <Button Content="×" HorizontalAlignment="Right" VerticalAlignment="Top" Width="32" Height="32" Padding="0" FontSize="20" Foreground="White" Background="Transparent" BorderThickness="0" Cursor="Hand" Click="CancelSettings_Click"/>
                     </Grid>
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,28,0,20">
                         <StackPanel>
-                            <Border Background="#20FFFFFF" CornerRadius="14" Padding="16,13" Margin="0,0,0,12">
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel><TextBlock Text="中央悬浮搜索" Foreground="White" FontSize="15"/><TextBlock Text="超大圆角、一体化搜索与键盘导航" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
                                     <CheckBox x:Name="FloatingSearchModeCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
                                 </Grid>
                             </Border>
-                            <Border Background="#20FFFFFF" CornerRadius="14" Padding="16,13" Margin="0,0,0,22">
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,22">
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel><TextBlock Text="全屏显示" Foreground="White" FontSize="15"/><TextBlock Text="覆盖当前屏幕并隐藏窗口边缘" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
+                                    <StackPanel><TextBlock Text="铺满桌面" Foreground="White" FontSize="15"/><TextBlock Text="铺满桌面工作区，同时保留 Windows 任务栏" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
                                     <CheckBox x:Name="FullScreenCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
                                 </Grid>
                             </Border>
@@ -225,6 +364,14 @@
                                 <Slider x:Name="HeightSlider" Minimum="600" TickFrequency="20" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
                             </StackPanel>
 
+                            <StackPanel x:Name="AppAreaSizePanel" Margin="0,4,0,0">
+                                <TextBlock Text="应用显示区域（全屏模式）" Foreground="#D8FFFFFF" FontSize="13" Margin="0,0,0,10"/>
+                                <Grid><TextBlock Text="区域宽度" Foreground="White"/><TextBlock x:Name="AppAreaWidthValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
+                                <Slider x:Name="AppAreaWidthSlider" Minimum="600" TickFrequency="20" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
+                                <Grid><TextBlock Text="区域高度" Foreground="White"/><TextBlock x:Name="AppAreaHeightValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
+                                <Slider x:Name="AppAreaHeightSlider" Minimum="420" TickFrequency="20" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
+                            </StackPanel>
+
                             <Separator Background="#35FFFFFF" Margin="0,8,0,20"/>
                             <Grid><TextBlock Text="每页列数" Foreground="White"/><TextBlock x:Name="ColumnsValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
                             <Slider x:Name="ColumnsSlider" Minimum="4" Maximum="12" TickFrequency="1" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
@@ -232,8 +379,26 @@
                             <Slider x:Name="RowsSlider" Minimum="3" Maximum="8" TickFrequency="1" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
                             <Grid><TextBlock Text="图标大小" Foreground="White"/><TextBlock x:Name="IconSizeValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
                             <Slider x:Name="IconSizeSlider" Minimum="48" Maximum="128" TickFrequency="4" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
-                            <Grid><TextBlock Text="背景模糊强度" Foreground="White"/><TextBlock x:Name="BackgroundBlurValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
-                            <Slider x:Name="BackgroundBlurSlider" Minimum="0" Maximum="40" TickFrequency="2" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
+
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,8,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="拼音检索" Foreground="White" FontSize="15"/><TextBlock Text="支持用 weixin、wx 搜索“微信”；关闭后卸载拼音词库" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
+                                    <CheckBox x:Name="PinyinSearchCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
+                                </Grid>
+                            </Border>
+
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="纯黑静态背景" Foreground="White" FontSize="15"/><TextBlock Text="不截取桌面，进一步降低内存和唤出开销" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
+                                    <CheckBox x:Name="StaticBlackBackgroundCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
+                                </Grid>
+                            </Border>
+                            <StackPanel x:Name="BackgroundBlurPanel">
+                                <Grid><TextBlock Text="背景模糊强度" Foreground="White"/><TextBlock x:Name="BackgroundBlurValueText" HorizontalAlignment="Right" Foreground="#B8FFFFFF"/></Grid>
+                                <Slider x:Name="BackgroundBlurSlider" Minimum="0" Maximum="40" TickFrequency="2" Style="{StaticResource SettingsSlider}" ValueChanged="SettingsControl_Changed"/>
+                            </StackPanel>
 
                             <Separator Background="#35FFFFFF" Margin="0,8,0,20"/>
                             <TextBlock Text="唤出快捷键" Foreground="White" Margin="0,0,0,8"/>
@@ -244,24 +409,25 @@
                                 <Button Grid.Column="1" Content="恢复默认" Margin="8,0,0,0" Padding="12,0" Click="ResetHotkey_Click"/>
                             </Grid>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                                <Button Content="Alt" Padding="12,6" Margin="0,0,8,0" Click="AltPreset_Click"/>
                                 <Button Content="Shift + Tab" Padding="12,6" Margin="0,0,8,0" Click="ShiftTabPreset_Click"/>
                                 <Button Content="Alt + Space" Padding="12,6" Click="AltSpacePreset_Click"/>
                             </StackPanel>
 
-                            <Border Background="#20FFFFFF" CornerRadius="14" Padding="16,13" Margin="0,0,0,12">
+                            <Border Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel><TextBlock Text="自动检查更新" Foreground="White" FontSize="15"/><TextBlock Text="每天最多检查一次 GitHub Releases" Foreground="#92FFFFFF" FontSize="12" Margin="0,3,0,0"/></StackPanel>
                                     <CheckBox x:Name="AutoUpdateCheck" Grid.Column="1" VerticalAlignment="Center" Checked="SettingsControl_Changed" Unchecked="SettingsControl_Changed"/>
                                 </Grid>
                             </Border>
-                            <Button Content="立即检查更新" Height="36" Click="CheckUpdates_Click"/>
+                            <Button Content="立即检查更新" Height="42" Style="{StaticResource PrimarySettingsButton}" Click="CheckUpdates_Click"/>
                         </StackPanel>
                     </ScrollViewer>
 
                     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="取消" Width="92" Height="38" Margin="0,0,10,0" Click="CancelSettings_Click"/>
-                        <Button Content="保存" Width="104" Height="38" Click="SaveSettings_Click"/>
+                        <Button Content="取消" Width="92" Height="40" Margin="0,0,10,0" Click="CancelSettings_Click"/>
+                        <Button Content="保存" Width="104" Height="40" Style="{StaticResource PrimarySettingsButton}" Click="SaveSettings_Click"/>
                     </StackPanel>
                 </Grid>
             </Border>

@@ -10,7 +10,7 @@
     <Product>应用中心</Product>
     <ApplicationIcon>Assets\Centre.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Authors>bin-art-666</Authors>
     <RepositoryUrl>https://github.com/bin-art-666/centre_app</RepositoryUrl>
   </PropertyGroup>

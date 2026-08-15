@@ -17,6 +17,7 @@ namespace centre_app;
 public partial class MainWindow : Window
 {
     private const int HotkeyId = 0xCE71;
+    private const uint ModNoRepeat = 0x4000;
     private const string InternalDragFormat = "Centre.LauncherItem";
     private const int SpotlightMaxResults = 7;
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -53,19 +54,25 @@ public partial class MainWindow : Window
     private UpdateInfo? _availableUpdate;
     private MonitorBounds _activeMonitor;
     private DragPreviewPopup? _dragPreviewPopup;
+    private bool _isMinimizedToTaskbar;
+    private double _capturedBackgroundBlur = double.NaN;
+    private bool _capturedStaticBlackBackground;
 
     private int ItemsPerPage => _settings.Rows * _settings.Columns;
 
     public MainWindow()
     {
         _activeMonitor = GetCursorMonitor();
-        var desktop = CaptureDesktop(_activeMonitor.PixelBounds);
-        InitializeComponent();
-        DesktopBackground.Source = desktop;
-
         var workArea = _activeMonitor.WorkArea;
         _settings = AppDataStore.LoadSettings();
         _settings.Normalize(Math.Max(800, workArea.Width), Math.Max(600, workArea.Height));
+        var desktop = _settings.StaticBlackBackground
+            ? null
+            : CaptureDesktop(_activeMonitor.PixelBounds, _settings.BackgroundBlur);
+        InitializeComponent();
+        DesktopBackground.Source = desktop;
+        _capturedBackgroundBlur = _settings.BackgroundBlur;
+        _capturedStaticBlackBackground = _settings.StaticBlackBackground;
         ApplyWindowSettings(_settings);
 
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.8) };
@@ -79,6 +86,7 @@ public partial class MainWindow : Window
 
         Loaded += MainWindow_Loaded;
         SourceInitialized += MainWindow_SourceInitialized;
+        StateChanged += MainWindow_StateChanged;
         Closed += MainWindow_Closed;
     }
 
@@ -89,7 +97,7 @@ public partial class MainWindow : Window
             (item.TargetKind == LauncherTargetKind.PackagedApp
                 ? !string.IsNullOrWhiteSpace(item.AppUserModelId)
                 : !string.IsNullOrWhiteSpace(item.TargetPath))));
-        foreach (var item in _allItems) LauncherSearch.Prepare(item);
+        foreach (var item in _allItems) LauncherSearch.Prepare(item, _settings.EnablePinyinSearch);
         IconCacheService.Cleanup(_allItems.Select(item => item.Id));
         _visibleItems = [.. _allItems];
         _isLoaded = true;
@@ -98,7 +106,7 @@ public partial class MainWindow : Window
         RenderCurrentView();
         AnimateIn();
         FocusActiveSearch();
-        LauncherFooterHint.Text = $"Esc 返回桌面  ·  {FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyVirtualKey)} 随时呼出";
+        LauncherFooterHint.Text = $"Esc 最小化到任务栏  ·  {FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyVirtualKey)} 随时呼出";
         _ = CheckUpdatesOnStartupAsync();
     }
 
@@ -107,7 +115,7 @@ public partial class MainWindow : Window
         var handle = new WindowInteropHelper(this).Handle;
         _source = HwndSource.FromHwnd(handle);
         _source?.AddHook(WndProc);
-        if (!RegisterHotKey(handle, HotkeyId, _settings.HotkeyModifiers, (uint)_settings.HotkeyVirtualKey))
+        if (!RegisterHotKey(handle, HotkeyId, _settings.HotkeyModifiers | ModNoRepeat, (uint)_settings.HotkeyVirtualKey))
             ShowToast($"{FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyVirtualKey)} 已被其他程序占用");
         else
         {
@@ -124,11 +132,35 @@ public partial class MainWindow : Window
         _source?.RemoveHook(WndProc);
     }
 
+    private void MainWindow_StateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            _isMinimizedToTaskbar = true;
+            Topmost = false;
+            return;
+        }
+
+        if (!_isMinimizedToTaskbar || WindowState != WindowState.Normal) return;
+        _isMinimizedToTaskbar = false;
+        Dispatcher.BeginInvoke(() =>
+        {
+            _activeMonitor = GetCursorMonitor();
+            RefreshDesktopBackground();
+            ApplyWindowSettings(_settings);
+            ApplyDisplayMode();
+            Topmost = true;
+            Activate();
+            AnimateIn();
+            FocusActiveSearch();
+        });
+    }
+
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == 0x0312 && wParam.ToInt32() == HotkeyId)
         {
-            if (IsVisible) HideLauncher(); else ShowLauncher();
+            if (IsLauncherOpen) HideLauncher(); else ShowLauncher();
             handled = true;
         }
         else if (msg == 0x02E0 || msg == 0x007E)
@@ -137,7 +169,7 @@ public partial class MainWindow : Window
             {
                 _activeMonitor = GetCursorMonitor();
                 ApplyWindowSettings(_settings);
-                DesktopBackground.Source = CaptureDesktop(_activeMonitor.PixelBounds);
+                RefreshDesktopBackground();
             });
         }
         return IntPtr.Zero;
@@ -170,7 +202,7 @@ public partial class MainWindow : Window
                 AppUserModelId = app.AppUserModelId,
                 PackageFamilyName = app.PackageFamilyName
             };
-            LauncherSearch.Prepare(item);
+            LauncherSearch.Prepare(item, _settings.EnablePinyinSearch);
             _allItems.Add(item);
             added++;
         }
@@ -214,7 +246,7 @@ public partial class MainWindow : Window
                 Name = GetDefaultName(path),
                 TargetPath = path
             };
-            LauncherSearch.Prepare(item);
+            LauncherSearch.Prepare(item, _settings.EnablePinyinSearch);
             _allItems.Add(item);
             added++;
         }
@@ -389,7 +421,7 @@ public partial class MainWindow : Window
         {
             Width = iconSize,
             Height = iconSize,
-            CornerRadius = new CornerRadius(13),
+            CornerRadius = new CornerRadius(4),
             Background = BrushFrom(palette[(item.Name.GetHashCode() & int.MaxValue) % palette.Length]),
             Child = new TextBlock
             {
@@ -408,8 +440,9 @@ public partial class MainWindow : Window
             Width = iconSize,
             Height = iconSize,
             Stretch = Stretch.Uniform,
-            Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 8, ShadowDepth = 2, Opacity = .28 }
+            SnapsToDevicePixels = true
         };
+        RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
         fallback.Visibility = item.Icon is null ? Visibility.Visible : Visibility.Collapsed;
         var iconHost = new Grid { Width = iconSize, Height = iconSize };
         iconHost.Children.Add(fallback);
@@ -514,7 +547,7 @@ public partial class MainWindow : Window
         {
             Width = _settings.IconSize,
             Height = _settings.IconSize,
-            CornerRadius = new CornerRadius(Math.Max(12, _settings.IconSize * .23)),
+            CornerRadius = new CornerRadius(5),
             Background = (System.Windows.Media.Brush)new BrushConverter().ConvertFromString(
                 palette[(item.Name.GetHashCode() & int.MaxValue) % palette.Length])!,
             Child = new TextBlock
@@ -535,15 +568,9 @@ public partial class MainWindow : Window
             Width = _settings.IconSize,
             Height = _settings.IconSize,
             Stretch = Stretch.Uniform,
-            SnapsToDevicePixels = true,
-            Effect = new System.Windows.Media.Effects.DropShadowEffect
-            {
-                BlurRadius = Math.Max(8, _settings.IconSize * .16),
-                ShadowDepth = 4,
-                Opacity = .43,
-                Color = Colors.Black
-            }
+            SnapsToDevicePixels = true
         };
+        RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
         fallback.Visibility = item.Icon is null ? Visibility.Visible : Visibility.Collapsed;
 
         var iconHost = new Grid { Width = _settings.IconSize, Height = _settings.IconSize };
@@ -660,7 +687,7 @@ public partial class MainWindow : Window
         var dialog = new RenameDialog(this, item.Name);
         if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.Result)) return;
         item.Name = dialog.Result;
-        LauncherSearch.Prepare(item);
+        LauncherSearch.Prepare(item, _settings.EnablePinyinSearch);
         PersistItems();
         RefreshFilter();
         RenderCurrentView(true);
@@ -923,6 +950,22 @@ public partial class MainWindow : Window
         _visibleItems = LauncherSearch.FilterAndRank(_allItems, query);
     }
 
+    private void SetPinyinSearchEnabled(bool enabled)
+    {
+        foreach (var item in _allItems) LauncherSearch.Prepare(item, enabled);
+        if (!enabled)
+        {
+            PinyinSearchService.Unload();
+            Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            });
+        }
+        RefreshFilter();
+    }
+
     private void ClearSearchButton_Click(object sender, RoutedEventArgs e)
     {
         if (_settings.FloatingSearchMode) SpotlightSearchBox.Clear(); else SearchBox.Clear();
@@ -933,7 +976,12 @@ public partial class MainWindow : Window
     {
         e.Handled = true;
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key is Key.LeftAlt or Key.RightAlt or Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin) return;
+        if (key is Key.LeftAlt or Key.RightAlt)
+        {
+            SetPendingHotkey(0, 0x12);
+            return;
+        }
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin) return;
         var modifiers = Keyboard.Modifiers;
         uint nativeModifiers = 0;
         if (modifiers.HasFlag(ModifierKeys.Alt)) nativeModifiers |= 0x0001;
@@ -950,7 +998,8 @@ public partial class MainWindow : Window
         HotkeyTextBox.Text = FormatHotkey(_pendingHotkeyModifiers, _pendingHotkeyVirtualKey);
     }
 
-    private void ResetHotkey_Click(object sender, RoutedEventArgs e) => SetPendingHotkey(0x0004, 0x09);
+    private void ResetHotkey_Click(object sender, RoutedEventArgs e) => SetPendingHotkey(0, 0x12);
+    private void AltPreset_Click(object sender, RoutedEventArgs e) => SetPendingHotkey(0, 0x12);
     private void ShiftTabPreset_Click(object sender, RoutedEventArgs e) => SetPendingHotkey(0x0004, 0x09);
     private void AltSpacePreset_Click(object sender, RoutedEventArgs e) => SetPendingHotkey(0x0001, 0x20);
 
@@ -967,18 +1016,19 @@ public partial class MainWindow : Window
         var handle = new WindowInteropHelper(this).Handle;
         if (handle == IntPtr.Zero) return false;
         UnregisterHotKey(handle, HotkeyId);
-        if (RegisterHotKey(handle, HotkeyId, modifiers, (uint)virtualKey))
+        if (RegisterHotKey(handle, HotkeyId, modifiers | ModNoRepeat, (uint)virtualKey))
         {
             _registeredHotkeyModifiers = modifiers;
             _registeredHotkeyVirtualKey = virtualKey;
             return true;
         }
-        RegisterHotKey(handle, HotkeyId, _registeredHotkeyModifiers, (uint)_registeredHotkeyVirtualKey);
+        RegisterHotKey(handle, HotkeyId, _registeredHotkeyModifiers | ModNoRepeat, (uint)_registeredHotkeyVirtualKey);
         return false;
     }
 
     private static string FormatHotkey(uint modifiers, int virtualKey)
     {
+        if (modifiers == 0 && virtualKey == 0x12) return "Alt";
         var parts = new List<string>();
         if ((modifiers & 0x0002) != 0) parts.Add("Ctrl");
         if ((modifiers & 0x0001) != 0) parts.Add("Alt");
@@ -1051,13 +1101,19 @@ public partial class MainWindow : Window
         _isSettingsInitializing = true;
         WidthSlider.Maximum = Math.Max(800, workArea.Width);
         HeightSlider.Maximum = Math.Max(600, workArea.Height);
+        AppAreaWidthSlider.Maximum = Math.Max(600, workArea.Width - 92);
+        AppAreaHeightSlider.Maximum = Math.Max(420, workArea.Height - 58);
         FloatingSearchModeCheck.IsChecked = _settings.FloatingSearchMode;
         FullScreenCheck.IsChecked = _settings.FullScreen;
         WidthSlider.Value = Math.Clamp(_settings.WindowWidth, WidthSlider.Minimum, WidthSlider.Maximum);
         HeightSlider.Value = Math.Clamp(_settings.WindowHeight, HeightSlider.Minimum, HeightSlider.Maximum);
+        AppAreaWidthSlider.Value = Math.Clamp(_settings.AppAreaWidth, AppAreaWidthSlider.Minimum, AppAreaWidthSlider.Maximum);
+        AppAreaHeightSlider.Value = Math.Clamp(_settings.AppAreaHeight, AppAreaHeightSlider.Minimum, AppAreaHeightSlider.Maximum);
         ColumnsSlider.Value = _settings.Columns;
         RowsSlider.Value = _settings.Rows;
         IconSizeSlider.Value = _settings.IconSize;
+        PinyinSearchCheck.IsChecked = _settings.EnablePinyinSearch;
+        StaticBlackBackgroundCheck.IsChecked = _settings.StaticBlackBackground;
         BackgroundBlurSlider.Value = _settings.BackgroundBlur;
         _pendingHotkeyModifiers = _settings.HotkeyModifiers;
         _pendingHotkeyVirtualKey = _settings.HotkeyVirtualKey;
@@ -1075,7 +1131,10 @@ public partial class MainWindow : Window
     {
         if (_isSettingsInitializing || SettingsLayer.Visibility != Visibility.Visible) return;
         UpdateSettingsLabels();
+        var wasPinyinEnabled = _settings.EnablePinyinSearch;
         _settings = ReadSettingsControls();
+        if (wasPinyinEnabled != _settings.EnablePinyinSearch)
+            SetPinyinSearchEnabled(_settings.EnablePinyinSearch);
         ApplyWindowSettings(_settings);
         ApplyGridSettings();
         ApplyDisplayMode();
@@ -1087,8 +1146,12 @@ public partial class MainWindow : Window
         var floating = FloatingSearchModeCheck.IsChecked == true;
         FullScreenCheck.IsEnabled = !floating;
         WindowSizePanel.IsEnabled = !floating && FullScreenCheck.IsChecked != true;
+        AppAreaSizePanel.IsEnabled = !floating && FullScreenCheck.IsChecked == true;
+        BackgroundBlurPanel.IsEnabled = StaticBlackBackgroundCheck.IsChecked != true;
         WidthValueText.Text = $"{Math.Round(WidthSlider.Value):0} px";
         HeightValueText.Text = $"{Math.Round(HeightSlider.Value):0} px";
+        AppAreaWidthValueText.Text = $"{Math.Round(AppAreaWidthSlider.Value):0} px";
+        AppAreaHeightValueText.Text = $"{Math.Round(AppAreaHeightSlider.Value):0} px";
         ColumnsValueText.Text = $"{Math.Round(ColumnsSlider.Value):0} 列";
         RowsValueText.Text = $"{Math.Round(RowsSlider.Value):0} 行";
         IconSizeValueText.Text = $"{Math.Round(IconSizeSlider.Value):0} px";
@@ -1106,12 +1169,17 @@ public partial class MainWindow : Window
             FullScreen = FullScreenCheck.IsChecked == true,
             WindowWidth = Math.Round(WidthSlider.Value),
             WindowHeight = Math.Round(HeightSlider.Value),
+            AppAreaWidth = Math.Round(AppAreaWidthSlider.Value),
+            AppAreaHeight = Math.Round(AppAreaHeightSlider.Value),
             Columns = (int)Math.Round(ColumnsSlider.Value),
             Rows = (int)Math.Round(RowsSlider.Value),
             IconSize = Math.Round(IconSizeSlider.Value),
+            EnablePinyinSearch = PinyinSearchCheck.IsChecked == true,
+            StaticBlackBackground = StaticBlackBackgroundCheck.IsChecked == true,
             BackgroundBlur = Math.Round(BackgroundBlurSlider.Value),
             HotkeyModifiers = _pendingHotkeyModifiers,
             HotkeyVirtualKey = _pendingHotkeyVirtualKey,
+            HotkeyDefaultsVersion = _settings.HotkeyDefaultsVersion,
             AutoCheckUpdates = AutoUpdateCheck.IsChecked == true,
             LastUpdateCheckUtc = _settings.LastUpdateCheckUtc,
             DismissedUpdateVersion = _settings.DismissedUpdateVersion
@@ -1140,8 +1208,11 @@ public partial class MainWindow : Window
     {
         if (_settingsSnapshot is not null)
         {
+            var wasPinyinEnabled = _settings.EnablePinyinSearch;
             _settings = _settingsSnapshot;
             _settingsSnapshot = null;
+            if (wasPinyinEnabled != _settings.EnablePinyinSearch)
+                SetPinyinSearchEnabled(_settings.EnablePinyinSearch);
             ApplyWindowSettings(_settings);
             ApplyGridSettings();
             ApplyDisplayMode();
@@ -1163,6 +1234,13 @@ public partial class MainWindow : Window
     {
         AppGrid.Columns = _settings.Columns;
         AppGrid.Rows = _settings.Rows;
+        var constrainArea = _settings.FullScreen && !_settings.FloatingSearchMode;
+        NormalLauncherShell.Width = constrainArea
+            ? Math.Min(_settings.AppAreaWidth, Math.Max(600, _activeMonitor.WorkArea.Width - 92))
+            : double.NaN;
+        NormalLauncherShell.Height = constrainArea
+            ? Math.Min(_settings.AppAreaHeight, Math.Max(420, _activeMonitor.WorkArea.Height - 58))
+            : double.NaN;
         _currentPage = Math.Max(0, Math.Min(_currentPage, Math.Max(0, (_visibleItems.Count - 1) / ItemsPerPage)));
     }
 
@@ -1175,10 +1253,10 @@ public partial class MainWindow : Window
 
         if (settings.FullScreen || settings.FloatingSearchMode)
         {
-            Left = _activeMonitor.Bounds.Left;
-            Top = _activeMonitor.Bounds.Top;
-            Width = _activeMonitor.Bounds.Width;
-            Height = _activeMonitor.Bounds.Height;
+            Left = workArea.Left;
+            Top = workArea.Top;
+            Width = workArea.Width;
+            Height = workArea.Height;
         }
         else
         {
@@ -1225,18 +1303,19 @@ public partial class MainWindow : Window
 
     private void ApplyBackgroundBlur()
     {
-        var radius = _settings.BackgroundBlur;
-        DesktopBackground.Margin = radius <= 0
-            ? new Thickness(0)
-            : new Thickness(-Math.Ceiling(radius * 1.5));
-        DesktopBackground.Effect = radius <= 0
-            ? null
-            : new System.Windows.Media.Effects.BlurEffect
-            {
-                Radius = radius,
-                KernelType = System.Windows.Media.Effects.KernelType.Gaussian,
-                RenderingBias = System.Windows.Media.Effects.RenderingBias.Performance
-            };
+        // A BlurEffect on a full-screen WPF element allocates several monitor-sized
+        // render targets.  On high-DPI displays that can retain hundreds of MB.
+        // The desktop snapshot is blurred while it is downsampled instead.
+        DesktopBackground.Margin = new Thickness(0);
+        DesktopBackground.Effect = null;
+        if (_settings.StaticBlackBackground)
+        {
+            PrimaryDimmer.Fill = System.Windows.Media.Brushes.Black;
+            EdgeDimmer.Opacity = 0;
+        }
+        if (!_capturedBackgroundBlur.Equals(_settings.BackgroundBlur) ||
+            _capturedStaticBlackBackground != _settings.StaticBlackBackground)
+            RefreshDesktopBackground();
     }
 
     private void ApplySpotlightTheme()
@@ -1440,20 +1519,24 @@ public partial class MainWindow : Window
 
     private void ShowLauncher()
     {
+        _isMinimizedToTaskbar = false;
         _activeMonitor = GetCursorMonitor();
-        DesktopBackground.Source = CaptureDesktop(_activeMonitor.PixelBounds);
+        RefreshDesktopBackground();
         ApplyWindowSettings(_settings);
         ApplyDisplayMode();
-        Show();
+        if (!IsVisible) Show();
+        WindowState = WindowState.Normal;
         Activate();
         Topmost = true;
         AnimateIn();
         FocusActiveSearch();
     }
 
+    private bool IsLauncherOpen => IsVisible && WindowState != WindowState.Minimized;
+
     public void ShowFromExternalInstance()
     {
-        if (!IsVisible) ShowLauncher();
+        if (!IsLauncherOpen) ShowLauncher();
         else
         {
             Topmost = true;
@@ -1466,8 +1549,11 @@ public partial class MainWindow : Window
     {
         if (SettingsLayer.Visibility == Visibility.Visible && _settingsSnapshot is not null)
         {
+            var wasPinyinEnabled = _settings.EnablePinyinSearch;
             _settings = _settingsSnapshot;
             _settingsSnapshot = null;
+            if (wasPinyinEnabled != _settings.EnablePinyinSearch)
+                SetPinyinSearchEnabled(_settings.EnablePinyinSearch);
             SettingsLayer.Visibility = Visibility.Collapsed;
             ApplyWindowSettings(_settings);
             ApplyGridSettings();
@@ -1475,15 +1561,19 @@ public partial class MainWindow : Window
             RenderCurrentView();
         }
         var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(140));
-        fade.Completed += (_, _) => { Hide(); Root.Opacity = 1; };
+        fade.Completed += (_, _) =>
+        {
+            Topmost = false;
+            _isMinimizedToTaskbar = true;
+            WindowState = WindowState.Minimized;
+            Root.Opacity = 1;
+        };
         Root.BeginAnimation(OpacityProperty, fade);
     }
 
     private void AnimateIn()
     {
         Root.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(240)) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.08, 1, TimeSpan.FromMilliseconds(280)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.08, 1, TimeSpan.FromMilliseconds(280)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
     }
 
     private void AnimatePage(int direction)
@@ -1510,17 +1600,37 @@ public partial class MainWindow : Window
         _toastTimer.Start();
     }
 
-    private static BitmapSource? CaptureDesktop(Rectangle bounds)
+    private void RefreshDesktopBackground()
+    {
+        DesktopBackground.Source = _settings.StaticBlackBackground
+            ? null
+            : CaptureDesktop(_activeMonitor.PixelBounds, _settings.BackgroundBlur);
+        _capturedBackgroundBlur = _settings.BackgroundBlur;
+        _capturedStaticBlackBackground = _settings.StaticBlackBackground;
+    }
+
+    private static BitmapSource? CaptureDesktop(Rectangle bounds, double blurRadius)
     {
         try
         {
             using var full = new Bitmap(bounds.Width, bounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
             using (var graphics = Graphics.FromImage(full)) graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
             using var bitmap = new Bitmap(Math.Max(1, bounds.Width / 4), Math.Max(1, bounds.Height / 4), System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-            using (var graphics = Graphics.FromImage(bitmap))
+            var blurScale = blurRadius <= 0 ? 1d : Math.Clamp(1d + blurRadius / 8d, 1d, 6d);
+            var sampleWidth = Math.Max(1, (int)Math.Round(bitmap.Width / blurScale));
+            var sampleHeight = Math.Max(1, (int)Math.Round(bitmap.Height / blurScale));
+            using var sample = new Bitmap(sampleWidth, sampleHeight, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var graphics = Graphics.FromImage(sample))
             {
                 graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
-                graphics.DrawImage(full, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+                graphics.DrawImage(full, new Rectangle(0, 0, sample.Width, sample.Height));
+            }
+            using (var graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.InterpolationMode = blurRadius <= 0
+                    ? System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear
+                    : System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                graphics.DrawImage(sample, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
             }
             var handle = bitmap.GetHbitmap();
             try

@@ -1,20 +1,17 @@
-using ToolGood.Words.Pinyin;
-
 namespace centre_app;
 
 public static class LauncherSearch
 {
-    public static void Prepare(LauncherItemData item)
+    public static void Prepare(LauncherItemData item, bool enablePinyinSearch = true)
     {
-        try
+        item.SearchPinyin = string.Empty;
+        item.SearchInitials = string.Empty;
+        if (!enablePinyinSearch) return;
+
+        if (PinyinSearchService.TryCreateIndex(item.Name, out var pinyin, out var initials))
         {
-            item.SearchPinyin = WordsHelper.GetPinyin(item.Name).ToLowerInvariant();
-            item.SearchInitials = WordsHelper.GetFirstPinyin(item.Name).ToLowerInvariant();
-        }
-        catch
-        {
-            item.SearchPinyin = string.Empty;
-            item.SearchInitials = string.Empty;
+            item.SearchPinyin = pinyin;
+            item.SearchInitials = initials;
         }
     }
 

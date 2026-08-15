@@ -27,6 +27,21 @@ public sealed class LauncherSearchTests
         Assert.Same(recent, results[0]);
     }
 
+    [Fact]
+    public void DisabledPinyinSearchDoesNotLoadDictionaryOrBuildIndex()
+    {
+        centre_app.PinyinSearchService.Unload();
+        var item = new centre_app.LauncherItemData { Name = "微信", TargetPath = "Wechat.exe" };
+
+        centre_app.LauncherSearch.Prepare(item, enablePinyinSearch: false);
+
+        Assert.False(centre_app.PinyinSearchService.IsLoaded);
+        Assert.Empty(item.SearchPinyin);
+        Assert.Empty(item.SearchInitials);
+        Assert.Empty(centre_app.LauncherSearch.FilterAndRank([item], "weixin"));
+        Assert.Same(item, centre_app.LauncherSearch.FilterAndRank([item], "微信")[0]);
+    }
+
     private static centre_app.LauncherItemData Item(string name, string path)
     {
         var item = new centre_app.LauncherItemData { Name = name, TargetPath = path };

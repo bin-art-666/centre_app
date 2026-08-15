@@ -7,6 +7,39 @@ public sealed class PersistenceTests : IDisposable
     private readonly string _directory = Path.Combine(Path.GetTempPath(), $"Centre.Tests.{Guid.NewGuid():N}");
 
     [Fact]
+    public void NewSettingsUseBalancedDefaultIconSize()
+    {
+        Assert.Equal(64, new centre_app.LauncherSettings().IconSize);
+    }
+
+    [Fact]
+    public void StandaloneAltIsTheDefaultHotkey()
+    {
+        var settings = new centre_app.LauncherSettings();
+        settings.Normalize(1440, 900);
+
+        Assert.Equal(0u, settings.HotkeyModifiers);
+        Assert.Equal(0x12, settings.HotkeyVirtualKey);
+        Assert.Equal(1, settings.HotkeyDefaultsVersion);
+    }
+
+    [Fact]
+    public void LegacyDefaultHotkeyMigratesToStandaloneAlt()
+    {
+        var settings = new centre_app.LauncherSettings
+        {
+            HotkeyModifiers = 0x0004,
+            HotkeyVirtualKey = 0x09,
+            HotkeyDefaultsVersion = 0
+        };
+
+        settings.Normalize(1440, 900);
+
+        Assert.Equal(0u, settings.HotkeyModifiers);
+        Assert.Equal(0x12, settings.HotkeyVirtualKey);
+    }
+
+    [Fact]
     public void LegacyItemsDefaultToFileTargets()
     {
         Directory.CreateDirectory(_directory);
@@ -39,6 +72,26 @@ public sealed class PersistenceTests : IDisposable
         var settings = centre_app.AppDataStore.LoadOrDefault(path, () => new centre_app.LauncherSettings());
         Assert.Equal(6, settings.Rows);
         Assert.NotEmpty(Directory.EnumerateFiles(_directory, "settings.json.corrupt.*"));
+    }
+
+    [Fact]
+    public void DisplayAreaAndStaticBackgroundSurviveCloneAndNormalize()
+    {
+        var settings = new centre_app.LauncherSettings
+        {
+            AppAreaWidth = 5000,
+            AppAreaHeight = 100,
+            EnablePinyinSearch = true,
+            StaticBlackBackground = true
+        };
+
+        settings.Normalize(1440, 900);
+        var clone = settings.Clone();
+
+        Assert.Equal(1440, clone.AppAreaWidth);
+        Assert.Equal(420, clone.AppAreaHeight);
+        Assert.True(clone.EnablePinyinSearch);
+        Assert.True(clone.StaticBlackBackground);
     }
 
     public void Dispose()

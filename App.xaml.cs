@@ -2,18 +2,26 @@
 using System.IO.Pipes;
 using System.IO;
 using System.Security.Principal;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Media;
 
 namespace centre_app;
 
 public partial class App : Application
 {
+    private const string AppUserModelId = "bin-art-666.ApplicationCenter";
     private Mutex? _instanceMutex;
     private CancellationTokenSource? _pipeCancellation;
     private string _pipeName = string.Empty;
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // This launcher is mostly static UI. Avoid loading the vendor D3D/media
+        // driver stack and retaining GPU render targets for a window-sized surface.
+        RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
+        try { SetCurrentProcessExplicitAppUserModelID(AppUserModelId); } catch { }
         var userId = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
         var instanceKey = userId.Replace('-', '_').Replace('\\', '_');
         _pipeName = $"Centre_{instanceKey}";
@@ -71,4 +79,7 @@ public partial class App : Application
             catch when (!cancellationToken.IsCancellationRequested) { }
         }
     }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 }
