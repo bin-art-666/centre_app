@@ -17,8 +17,8 @@ jobs:
       CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
       - name: Restore
@@ -66,7 +66,7 @@ jobs:
         shell: pwsh
         run: |
           Get-ChildItem artifacts -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash)  $($_.Name)" } | Set-Content artifacts/SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           name: Centre-${{ github.ref_name }}
